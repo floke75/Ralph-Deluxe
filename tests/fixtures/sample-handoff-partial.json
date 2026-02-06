@@ -53,5 +53,7 @@
       "impact": "Token estimates may be off for non-ASCII text",
       "workaround": "Use LC_ALL=C for byte-accurate counting"
     }
-  ]
+  ],
+  "summary": "Partial implementation of context module — token budgeting not yet done.",
+  "freeform": "Started the context assembly module. Got skill loading and L2 handoff extraction working, but the token budgeting and truncation logic is incomplete. The truncation currently breaks mid-word which is ugly — needs word-boundary-aware logic. Also discovered that bash substring expansion doesn't handle multi-byte UTF-8 correctly, so token estimates will be off for non-ASCII. Workaround is LC_ALL=C. Next iteration should finish the truncation logic and add edge case tests."
 }
