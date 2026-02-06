@@ -76,44 +76,6 @@ get_prev_handoff_summary() {
     }' "$latest"
 }
 
-# get_prev_handoff_for_mode — Return context from the latest handoff based on mode
-# In handoff-only mode, returns the freeform narrative (the primary memory artifact).
-# In handoff-plus-index mode, returns freeform + structured L2 for richer context.
-get_prev_handoff_for_mode() {
-    local handoffs_dir="${1:-.ralph/handoffs}"
-    local mode="${2:-handoff-only}"
-
-    local latest
-    latest=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -V | tail -1)
-
-    if [[ -z "$latest" ]]; then
-        echo ""
-        return
-    fi
-
-    case "$mode" in
-        handoff-only)
-            # Return the full freeform narrative — this IS the memory
-            jq -r '.freeform // empty' "$latest"
-            ;;
-        handoff-plus-index)
-            # Return freeform + structured L2 for richer context
-            local narrative
-            narrative=$(jq -r '.freeform // ""' "$latest")
-            local l2
-            l2=$(jq -r '{
-                task: .task_completed.task_id,
-                decisions: .architectural_notes,
-                constraints: [.constraints_discovered[] | "\(.constraint): \(.workaround // .impact)"]
-            }' "$latest")
-            echo "${narrative}"
-            echo ""
-            echo "### Structured context from previous iteration"
-            echo "${l2}"
-            ;;
-    esac
-}
-
 # get_earlier_l1_summaries — Get L1 summaries from the 2nd and 3rd most recent handoffs
 # These provide lightweight context about recent work beyond the immediate previous iteration.
 get_earlier_l1_summaries() {

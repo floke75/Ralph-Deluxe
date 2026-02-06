@@ -43,7 +43,5 @@
       ]
     }
   ],
-  "constraints_discovered": [],
-  "summary": "Partially implemented plan-ops.sh with task retrieval and amendment logic.",
-  "freeform": "Got the core task retrieval and status mutation working — used jq select filters instead of array indexing for robustness against plan reordering. The backup-then-modify pattern for plan mutations is solid. However, hit a blocker: jq amendment insertion produces invalid JSON when the target array is empty. This is the high-priority item for the next iteration. The tests for basic get/set work, but amendment edge cases need investigation before this can be marked complete."
+  "constraints_discovered": []
 }
