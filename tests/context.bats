@@ -148,6 +148,53 @@ teardown() {
     [[ "$output" == *"TASK-004"* ]]
 }
 
+# --- get_prev_handoff_for_mode ---
+
+@test "get_prev_handoff_for_mode extracts freeform from latest handoff in handoff-only mode" {
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs" "handoff-only"
+    [[ "$status" -eq 0 ]]
+    # Should contain the freeform narrative text from sample-handoff.json
+    [[ "$output" == *"git operations module"* ]]
+    [[ "$output" == *"rev-parse HEAD"* ]]
+}
+
+@test "get_prev_handoff_for_mode returns empty when no handoffs exist" {
+    local empty_dir
+    empty_dir=$(mktemp -d)
+    run get_prev_handoff_for_mode "$empty_dir" "handoff-only"
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]]
+    rm -rf "$empty_dir"
+}
+
+@test "get_prev_handoff_for_mode picks latest handoff by number" {
+    cp "$TEST_DIR/fixtures/sample-handoff-002.json" "$TEST_DIR/handoffs/handoff-004.json"
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs" "handoff-only"
+    [[ "$status" -eq 0 ]]
+    # Should pick handoff-004 freeform (mentions jq amendment)
+    [[ "$output" == *"jq amendment insertion"* ]]
+}
+
+@test "get_prev_handoff_for_mode returns freeform plus structured context in handoff-plus-index mode" {
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs" "handoff-plus-index"
+    [[ "$status" -eq 0 ]]
+    # Should contain the freeform narrative
+    [[ "$output" == *"git operations module"* ]]
+    # Should also contain the structured context header
+    [[ "$output" == *"Structured context from previous iteration"* ]]
+    # Should contain task ID from structured L2
+    [[ "$output" == *"TASK-003"* ]]
+}
+
+@test "get_prev_handoff_for_mode defaults to handoff-only when mode not specified" {
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs"
+    [[ "$status" -eq 0 ]]
+    # Should return just freeform (handoff-only behavior)
+    [[ "$output" == *"git operations module"* ]]
+    # Should NOT contain the structured context header
+    [[ "$output" != *"Structured context from previous iteration"* ]]
+}
+
 # --- format_compacted_context ---
 
 @test "format_compacted_context produces all markdown sections" {
