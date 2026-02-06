@@ -1,0 +1,129 @@
+{
+  "type": "object",
+  "properties": {
+    "task_completed": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "summary": { "type": "string" },
+        "fully_complete": { "type": "boolean" }
+      },
+      "required": ["task_id", "summary", "fully_complete"]
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "planned": { "type": "string" },
+          "actual": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["planned", "actual", "reason"]
+      }
+    },
+    "bugs_encountered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "resolution": { "type": "string" },
+          "resolved": { "type": "boolean" }
+        },
+        "required": ["description", "resolution", "resolved"]
+      }
+    },
+    "architectural_notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "unfinished_business": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": { "type": "string" },
+          "reason": { "type": "string" },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] }
+        },
+        "required": ["item", "reason", "priority"]
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_touched": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "action": { "type": "string", "enum": ["created", "modified", "deleted"] }
+        },
+        "required": ["path", "action"]
+      }
+    },
+    "plan_amendments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "modify", "remove"] },
+          "task_id": { "type": "string" },
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "skills": { "type": "array", "items": { "type": "string" } },
+              "needs_docs": { "type": "boolean" },
+              "libraries": { "type": "array", "items": { "type": "string" } },
+              "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+              "depends_on": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "changes": { "type": "object" },
+          "after": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["action", "reason"]
+      }
+    },
+    "tests_added": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string" },
+          "test_names": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["file", "test_names"]
+      }
+    },
+    "constraints_discovered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "constraint": { "type": "string" },
+          "impact": { "type": "string" },
+          "workaround": { "type": "string" }
+        },
+        "required": ["constraint", "impact"]
+      }
+    }
+  },
+  "required": [
+    "task_completed",
+    "deviations",
+    "bugs_encountered",
+    "architectural_notes",
+    "files_touched",
+    "plan_amendments",
+    "tests_added",
+    "constraints_discovered"
+  ]
+}

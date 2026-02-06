@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "properties": {
+    "project_summary": { "type": "string" },
+    "completed_work": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "active_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "constraint": { "type": "string" },
+          "source_iteration": { "type": "string" }
+        },
+        "required": ["constraint"]
+      }
+    },
+    "architectural_decisions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "unresolved_issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "file_knowledge": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "purpose": { "type": "string" }
+        },
+        "required": ["path", "purpose"]
+      }
+    },
+    "library_docs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "library": { "type": "string" },
+          "key_apis": { "type": "string" },
+          "usage_notes": { "type": "string" }
+        },
+        "required": ["library", "key_apis"]
+      }
+    }
+  },
+  "required": [
+    "project_summary",
+    "completed_work",
+    "active_constraints",
+    "architectural_decisions",
+    "file_knowledge"
+  ]
+}
