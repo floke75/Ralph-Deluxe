@@ -48,5 +48,7 @@
       "impact": "Runtime state files must be explicitly excluded from clean",
       "workaround": "Use git clean -fd --exclude=.ralph/"
     }
-  ]
+  ],
+  "summary": "Implemented git-ops.sh with checkpoint, rollback, and commit functions.",
+  "freeform": "Built the git operations module from scratch. The main decisions were using rev-parse HEAD instead of tags for checkpoints (simpler, avoids namespace pollution) and adding git clean -fd to rollback (reset --hard alone misses untracked files). One gotcha: git clean removes .gitignore-matched files too, so we need --exclude=.ralph/ to protect runtime state. All three bats tests pass. Next iteration should wire git-ops into the main loop's checkpoint/rollback cycle."
 }

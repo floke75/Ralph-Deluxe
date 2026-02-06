@@ -42,7 +42,7 @@ run_coding_iteration() {
     local response
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
         log "info" "[DRY RUN] Would invoke: claude ${cmd_args[*]}"
-        response='{"type":"result","subtype":"success","cost_usd":0,"duration_ms":0,"duration_api_ms":0,"is_error":false,"num_turns":1,"result":"{\"task_completed\":{\"task_id\":\"DRY-RUN\",\"summary\":\"Dry run mode\",\"fully_complete\":true},\"deviations\":[],\"bugs_encountered\":[],\"architectural_notes\":[],\"files_touched\":[],\"plan_amendments\":[],\"tests_added\":[],\"constraints_discovered\":[]}"}'
+        response='{"type":"result","subtype":"success","cost_usd":0,"duration_ms":0,"duration_api_ms":0,"is_error":false,"num_turns":1,"result":"{\"task_completed\":{\"task_id\":\"DRY-RUN\",\"summary\":\"Dry run mode\",\"fully_complete\":true},\"deviations\":[],\"bugs_encountered\":[],\"architectural_notes\":[],\"files_touched\":[],\"plan_amendments\":[],\"tests_added\":[],\"constraints_discovered\":[],\"summary\":\"Dry run completed successfully.\",\"freeform\":\"This was a dry run iteration. No actual changes were made. The orchestrator simulated a coding pass to verify the pipeline works end-to-end.\"}"}'
         echo "$response"
         return 0
     fi

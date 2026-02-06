@@ -4,7 +4,7 @@
   "is_error": false,
   "duration_ms": 12345,
   "num_turns": 5,
-  "result": "{\"task_completed\":{\"task_id\":\"TASK-002\",\"summary\":\"Implemented the feature. All tests pass.\",\"fully_complete\":true},\"deviations\":[],\"bugs_encountered\":[],\"architectural_notes\":[\"Used standard patterns\"],\"unfinished_business\":[],\"recommendations\":[],\"files_touched\":[{\"path\":\"src/feature.sh\",\"action\":\"created\"}],\"plan_amendments\":[],\"tests_added\":[],\"constraints_discovered\":[]}",
+  "result": "{\"task_completed\":{\"task_id\":\"TASK-002\",\"summary\":\"Implemented the feature. All tests pass.\",\"fully_complete\":true},\"deviations\":[],\"bugs_encountered\":[],\"architectural_notes\":[\"Used standard patterns\"],\"unfinished_business\":[],\"recommendations\":[],\"files_touched\":[{\"path\":\"src/feature.sh\",\"action\":\"created\"}],\"plan_amendments\":[],\"tests_added\":[],\"constraints_discovered\":[],\"summary\":\"Implemented the feature with standard patterns.\",\"freeform\":\"Straightforward implementation — created src/feature.sh using the standard patterns from the project conventions. All tests pass on first run. No surprises or edge cases. The feature is self-contained and shouldn't affect other modules. Next iteration can move on to the next task.\"}",
   "total_cost_usd": 0.05,
   "session_id": "mock-session-001"
 }
