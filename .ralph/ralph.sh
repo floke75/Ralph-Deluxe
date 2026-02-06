@@ -285,6 +285,19 @@ run_coding_cycle() {
     # Get previous handoff summary
     prev_handoff="$(get_prev_handoff_summary "${RALPH_DIR}/handoffs")"
 
+    # Get earlier L1 summaries (iterations 2-3 back)
+    local earlier_l1=""
+    earlier_l1="$(get_earlier_l1_summaries "${RALPH_DIR}/handoffs")"
+
+    # Check for failure context from a previous failed validation attempt
+    local failure_context=""
+    local failure_ctx_file="${RALPH_DIR}/context/failure-context.md"
+    if [[ -f "$failure_ctx_file" ]]; then
+        failure_context="$(cat "$failure_ctx_file")"
+        rm -f "$failure_ctx_file"
+        log "info" "Injecting failure context from previous attempt"
+    fi
+
     # Collect skills content
     local skills_content=""
     if [[ -n "$skills_file" && -f "$skills_file" ]]; then
@@ -299,7 +312,7 @@ run_coding_cycle() {
     fi
 
     # Build prompt with priority-ordered context
-    prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content")"
+    prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content" "$failure_context" "$earlier_l1")"
 
     # Apply token budget truncation
     prompt="$(truncate_to_budget "$prompt")"
@@ -545,13 +558,15 @@ main() {
                 set_task_status "$PLAN_FILE" "$task_id" "pending"
             fi
 
-            # Generate failure context for potential retry
+            # Save failure context for the retry iteration's prompt
             local validation_file=".ralph/logs/validation/iter-${current_iteration}.json"
             if [[ -f "$validation_file" ]]; then
                 local failure_ctx
                 failure_ctx="$(generate_failure_context "$validation_file")"
                 if [[ -n "$failure_ctx" ]]; then
-                    log "info" "Failure context generated for retry"
+                    mkdir -p "${RALPH_DIR}/context"
+                    echo "$failure_ctx" > "${RALPH_DIR}/context/failure-context.md"
+                    log "info" "Failure context saved for retry"
                 fi
             fi
         fi
