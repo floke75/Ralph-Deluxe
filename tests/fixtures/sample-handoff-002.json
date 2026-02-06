@@ -1,0 +1,47 @@
+{
+  "task_completed": {
+    "task_id": "TASK-004",
+    "summary": "Implemented plan-ops.sh with task retrieval and amendment logic. Partial completion due to edge case.",
+    "fully_complete": false
+  },
+  "deviations": [
+    {
+      "planned": "Simple array index for task lookup",
+      "actual": "Used jq select filter for ID-based lookup",
+      "reason": "More robust against plan reordering"
+    }
+  ],
+  "bugs_encountered": [
+    {
+      "description": "jq amendment insertion produced invalid JSON for empty arrays",
+      "resolution": "Pending investigation",
+      "resolved": false
+    }
+  ],
+  "architectural_notes": [
+    "Plan mutations use backup-then-modify pattern for safety"
+  ],
+  "unfinished_business": [
+    {
+      "item": "Amendment array insertion edge case",
+      "reason": "Empty array handling in jq needs investigation",
+      "priority": "high"
+    }
+  ],
+  "recommendations": [],
+  "files_touched": [
+    { "path": ".ralph/lib/plan-ops.sh", "action": "created" },
+    { "path": "tests/plan-ops.bats", "action": "created" }
+  ],
+  "plan_amendments": [],
+  "tests_added": [
+    {
+      "file": "tests/plan-ops.bats",
+      "test_names": [
+        "get_next_task returns first pending",
+        "set_task_status updates correctly"
+      ]
+    }
+  ],
+  "constraints_discovered": []
+}

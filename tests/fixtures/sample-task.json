@@ -1,0 +1,20 @@
+{
+  "id": "TASK-005",
+  "title": "Implement context assembly module",
+  "description": "Create lib/context.sh with prompt assembly, skill loading, and token budgeting functions.",
+  "status": "pending",
+  "order": 5,
+  "skills": ["bash-conventions", "jq-patterns"],
+  "needs_docs": false,
+  "libraries": [],
+  "acceptance_criteria": [
+    "build_coding_prompt assembles all sections",
+    "load_skills concatenates matching skill files",
+    "Token estimation within 20% accuracy",
+    "Truncation preserves highest-priority content"
+  ],
+  "depends_on": ["TASK-004"],
+  "max_turns": 15,
+  "retry_count": 0,
+  "max_retries": 2
+}

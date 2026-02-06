@@ -1,0 +1,17 @@
+{
+  "id": "TASK-008",
+  "title": "Integrate Context7 for library docs",
+  "description": "Add Context7 MCP queries for external library documentation.",
+  "status": "pending",
+  "order": 8,
+  "skills": ["mcp-config"],
+  "needs_docs": true,
+  "libraries": ["@upstash/context7-mcp"],
+  "acceptance_criteria": [
+    "Memory iteration queries Context7 successfully"
+  ],
+  "depends_on": ["TASK-007"],
+  "max_turns": 15,
+  "retry_count": 0,
+  "max_retries": 2
+}

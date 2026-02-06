@@ -1,0 +1,52 @@
+{
+  "task_completed": {
+    "task_id": "TASK-003",
+    "summary": "Implemented git-ops.sh with checkpoint, rollback, and commit functions. All three bats tests pass.",
+    "fully_complete": true
+  },
+  "deviations": [
+    {
+      "planned": "Use git tags for checkpoints",
+      "actual": "Used git rev-parse HEAD to capture commit hashes directly",
+      "reason": "Simpler and avoids tag namespace pollution"
+    }
+  ],
+  "bugs_encountered": [
+    {
+      "description": "git clean -fd was removing .ralph/state.json",
+      "resolution": "Added .ralph/ to .gitignore exception list before clean",
+      "resolved": true
+    }
+  ],
+  "architectural_notes": [
+    "Decided to always auto-commit before iteration starts, creating clean reset points",
+    "git clean -fd is essential — reset --hard alone doesn't remove new untracked files"
+  ],
+  "unfinished_business": [],
+  "recommendations": [
+    "Consider adding a --dry-run flag to git-ops functions for testing"
+  ],
+  "files_touched": [
+    { "path": ".ralph/lib/git-ops.sh", "action": "created" },
+    { "path": "tests/git-ops.bats", "action": "created" },
+    { "path": ".gitignore", "action": "modified" }
+  ],
+  "plan_amendments": [],
+  "tests_added": [
+    {
+      "file": "tests/git-ops.bats",
+      "test_names": [
+        "create_checkpoint captures current HEAD",
+        "rollback_to_checkpoint restores previous state",
+        "rollback removes untracked files"
+      ]
+    }
+  ],
+  "constraints_discovered": [
+    {
+      "constraint": "git clean -fd removes files matching .gitignore patterns",
+      "impact": "Runtime state files must be explicitly excluded from clean",
+      "workaround": "Use git clean -fd --exclude=.ralph/"
+    }
+  ]
+}

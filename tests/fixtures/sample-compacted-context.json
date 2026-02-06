@@ -1,0 +1,38 @@
+{
+  "project_summary": "Ralph Deluxe orchestrator project. Phases 1-3 complete: scaffold, main loop skeleton, and git operations module implemented.",
+  "completed_work": [
+    "Phase 1: Directory structure and all config files created",
+    "Phase 2: Main loop skeleton with stub functions",
+    "Phase 3: Git checkpoint/rollback/commit operations"
+  ],
+  "active_constraints": [
+    {
+      "constraint": "git clean -fd removes .gitignore-matched files",
+      "source_iteration": "3"
+    },
+    {
+      "constraint": "All JSON files must validate with jq",
+      "source_iteration": "1"
+    }
+  ],
+  "architectural_decisions": [
+    "Auto-commit before each iteration for clean reset points",
+    "git rev-parse HEAD for checkpoints instead of tags",
+    "Backup-then-modify pattern for plan mutations"
+  ],
+  "unresolved_issues": [
+    "jq amendment insertion edge case with empty arrays"
+  ],
+  "file_knowledge": [
+    { "path": ".ralph/ralph.sh", "purpose": "Main orchestrator loop (~120 lines)" },
+    { "path": ".ralph/lib/git-ops.sh", "purpose": "Git checkpoint, rollback, and commit functions" },
+    { "path": ".ralph/config/ralph.conf", "purpose": "Environment and project configuration" }
+  ],
+  "library_docs": [
+    {
+      "library": "bats-core",
+      "key_apis": "@test blocks, run command, $status, $output, setup(), teardown()",
+      "usage_notes": "Use setup/teardown for temp directories. Assert with [[ ]] not [ ]."
+    }
+  ]
+}

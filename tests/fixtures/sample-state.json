@@ -1,0 +1,9 @@
+{
+  "current_iteration": 5,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 5,
+  "total_handoff_bytes_since_compaction": 15000,
+  "last_task_id": "TASK-004",
+  "started_at": "2026-02-06T10:00:00Z",
+  "status": "running"
+}
