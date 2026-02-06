@@ -239,9 +239,9 @@ teardown() {
     compacted_pos=$(echo "$output" | grep -n "## Project Context" | head -1 | cut -d: -f1)
     prev_pos=$(echo "$output" | grep -n "## Previous Iteration" | head -1 | cut -d: -f1)
 
-    # Priority order: task > output > skills > compacted > previous
+    # Priority order: task > output > skills > previous L2 > compacted context
     [[ "$task_pos" -lt "$output_pos" ]]
     [[ "$output_pos" -lt "$skills_pos" ]]
-    [[ "$skills_pos" -lt "$compacted_pos" ]]
-    [[ "$compacted_pos" -lt "$prev_pos" ]]
+    [[ "$skills_pos" -lt "$prev_pos" ]]
+    [[ "$prev_pos" -lt "$compacted_pos" ]]
 }
