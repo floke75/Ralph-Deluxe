@@ -114,6 +114,14 @@
         },
         "required": ["constraint", "impact"]
       }
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-line summary of what was accomplished this iteration."
+    },
+    "freeform": {
+      "type": "string",
+      "description": "Freeform handoff briefing for the next iteration. Write as if briefing a colleague picking up the work tomorrow."
     }
   },
   "required": [
@@ -124,6 +132,8 @@
     "files_touched",
     "plan_amendments",
     "tests_added",
-    "constraints_discovered"
+    "constraints_discovered",
+    "summary",
+    "freeform"
   ]
 }

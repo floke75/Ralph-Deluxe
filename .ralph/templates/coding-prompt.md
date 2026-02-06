@@ -10,15 +10,24 @@
 ## Skills & Conventions
 {{SKILLS_SECTION}}
 
-## Output Requirements
-You MUST produce a handoff document as your final output. Structure your response as valid JSON matching the handoff schema provided via --json-schema.
-After implementing, run the acceptance criteria checks yourself before producing the handoff.
+## When You're Done
 
-Key fields in the handoff:
-- task_completed: summary of what you did and whether it's fully complete
-- deviations: any changes from the plan with reasons
-- bugs_encountered: problems found and their resolutions
-- architectural_notes: key decisions for future iterations
-- files_touched: every file you created, modified, or deleted
-- plan_amendments: suggestions for plan changes (max 3)
-- constraints_discovered: limitations found during implementation
+After completing your implementation and verifying the acceptance criteria,
+write a handoff for whoever picks up this project next.
+
+Your output must be valid JSON matching the provided schema.
+
+The `summary` field should be a single sentence describing what you accomplished.
+
+The `freeform` field is the most important part of your output — write it as
+if briefing a colleague who's picking up tomorrow. Cover:
+
+- What you did and why you made the choices you made
+- Anything that surprised you or didn't go as expected
+- Anything that's fragile, incomplete, or needs attention
+- What you'd recommend the next iteration focus on
+- Key technical details the next person needs to know
+
+The structured fields (task_completed, files_touched, etc.) help the
+orchestrator track progress. The freeform narrative is how the next
+iteration will actually understand what happened.
