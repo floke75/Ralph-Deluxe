@@ -1,0 +1,53 @@
+{
+  "project": "test-project",
+  "branch": "main",
+  "max_iterations": 10,
+  "validation_strategy": "strict",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "First task",
+      "description": "First task.",
+      "status": "done",
+      "order": 1,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Done"],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-002",
+      "title": "Second task",
+      "description": "Second task.",
+      "status": "done",
+      "order": 2,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Done"],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-003",
+      "title": "Third task",
+      "description": "Third task.",
+      "status": "skipped",
+      "order": 3,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Done"],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    }
+  ]
+}

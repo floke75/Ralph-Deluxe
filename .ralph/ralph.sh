@@ -314,7 +314,7 @@ main() {
 
     while (( current_iteration < MAX_ITERATIONS )); do
         # Check if plan is complete
-        if is_plan_complete; then
+        if is_plan_complete "$PLAN_FILE"; then
             log "info" "All tasks complete. Exiting."
             write_state "status" "complete"
             break
@@ -322,7 +322,7 @@ main() {
 
         # Get next pending task
         local task_json
-        task_json="$(get_next_task)"
+        task_json="$(get_next_task "$PLAN_FILE")"
 
         if [[ -z "$task_json" || "$task_json" == "{}" || "$task_json" == "null" ]]; then
             log "info" "No pending tasks found. Exiting."
@@ -346,18 +346,18 @@ main() {
             log "info" "[DRY RUN] Would run coding iteration"
             log "info" "[DRY RUN] Would run validation"
             log "info" "[DRY RUN] Would commit or rollback"
-            set_task_status "$task_id" "done"
+            set_task_status "$PLAN_FILE" "$task_id" "done"
             continue
         fi
 
         # Check if compaction is needed before coding iteration
-        if check_compaction_trigger; then
+        if check_compaction_trigger "$STATE_FILE" "$task_json"; then
             log "info" "Compaction triggered, running memory iteration"
             run_memory_iteration
         fi
 
         # Mark task as in-progress
-        set_task_status "$task_id" "in_progress"
+        set_task_status "$PLAN_FILE" "$task_id" "in_progress"
 
         # Create git checkpoint
         local checkpoint
@@ -373,10 +373,13 @@ main() {
         if run_validation "$current_iteration"; then
             log "info" "Validation passed for iteration $current_iteration"
             commit_iteration "$current_iteration" "$task_id" "passed validation"
-            set_task_status "$task_id" "done"
+            set_task_status "$PLAN_FILE" "$task_id" "done"
 
             # Apply any plan amendments from the handoff
-            apply_amendments "$current_iteration"
+            local handoff_file="${RALPH_DIR}/handoffs/handoff-$(printf '%03d' "$current_iteration").json"
+            if [[ -f "$handoff_file" ]]; then
+                apply_amendments "$PLAN_FILE" "$handoff_file" "$task_id"
+            fi
         else
             log "warn" "Validation failed for iteration $current_iteration, rolling back"
             rollback_to_checkpoint "$checkpoint"
@@ -388,7 +391,7 @@ main() {
 
             if (( retry_count >= max_retries )); then
                 log "error" "Task $task_id exceeded max retries ($max_retries)"
-                set_task_status "$task_id" "failed"
+                set_task_status "$PLAN_FILE" "$task_id" "failed"
             else
                 log "info" "Will retry task $task_id (attempt $((retry_count + 1))/$max_retries)"
             fi

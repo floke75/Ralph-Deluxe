@@ -1,0 +1,49 @@
+{
+  "task_completed": {
+    "task_id": "TASK-006",
+    "summary": "Attempted too many amendments.",
+    "fully_complete": true
+  },
+  "deviations": [],
+  "bugs_encountered": [],
+  "architectural_notes": [],
+  "unfinished_business": [],
+  "recommendations": [],
+  "files_touched": [],
+  "plan_amendments": [
+    {
+      "action": "add",
+      "task": {
+        "id": "TASK-X1",
+        "title": "Extra task 1",
+        "description": "First extra."
+      },
+      "reason": "Need more work"
+    },
+    {
+      "action": "add",
+      "task": {
+        "id": "TASK-X2",
+        "title": "Extra task 2",
+        "description": "Second extra."
+      },
+      "reason": "Need more work"
+    },
+    {
+      "action": "add",
+      "task": {
+        "id": "TASK-X3",
+        "title": "Extra task 3",
+        "description": "Third extra."
+      },
+      "reason": "Need more work"
+    },
+    {
+      "action": "remove",
+      "task_id": "TASK-001",
+      "reason": "Want to remove done task"
+    }
+  ],
+  "tests_added": [],
+  "constraints_discovered": []
+}

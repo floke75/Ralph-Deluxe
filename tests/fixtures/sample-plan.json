@@ -1,0 +1,53 @@
+{
+  "project": "test-project",
+  "branch": "main",
+  "max_iterations": 10,
+  "validation_strategy": "strict",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "First task (done)",
+      "description": "Already completed task.",
+      "status": "done",
+      "order": 1,
+      "skills": ["bash-conventions"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Task is complete"],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-002",
+      "title": "Second task (pending, depends on TASK-001)",
+      "description": "Task with a satisfied dependency.",
+      "status": "pending",
+      "order": 2,
+      "skills": ["bash-conventions", "jq-patterns"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Function works", "Tests pass"],
+      "depends_on": ["TASK-001"],
+      "max_turns": 20,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-003",
+      "title": "Third task (pending, no deps)",
+      "description": "Independent pending task.",
+      "status": "pending",
+      "order": 3,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": ["Output is valid"],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    }
+  ]
+}

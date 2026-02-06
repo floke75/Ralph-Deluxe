@@ -1,0 +1,10 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 12345,
+  "num_turns": 5,
+  "result": "{\"task_completed\":{\"task_id\":\"TASK-002\",\"summary\":\"Implemented the feature. All tests pass.\",\"fully_complete\":true},\"deviations\":[],\"bugs_encountered\":[],\"architectural_notes\":[\"Used standard patterns\"],\"unfinished_business\":[],\"recommendations\":[],\"files_touched\":[{\"path\":\"src/feature.sh\",\"action\":\"created\"}],\"plan_amendments\":[],\"tests_added\":[],\"constraints_discovered\":[]}",
+  "total_cost_usd": 0.05,
+  "session_id": "mock-session-001"
+}

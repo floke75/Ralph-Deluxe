@@ -1,0 +1,36 @@
+{
+  "task_completed": {
+    "task_id": "TASK-004",
+    "summary": "Implemented plan-ops with amendment support.",
+    "fully_complete": true
+  },
+  "deviations": [],
+  "bugs_encountered": [],
+  "architectural_notes": [],
+  "unfinished_business": [],
+  "recommendations": [],
+  "files_touched": [],
+  "plan_amendments": [
+    {
+      "action": "add",
+      "task": {
+        "id": "TASK-NEW-001",
+        "title": "New edge case handling",
+        "description": "Handle empty array edge case in plan mutations."
+      },
+      "after": "TASK-002",
+      "reason": "Discovered edge case during implementation"
+    },
+    {
+      "action": "modify",
+      "task_id": "TASK-003",
+      "changes": {
+        "max_turns": 25,
+        "skills": ["bash-conventions", "jq-patterns"]
+      },
+      "reason": "Task is more complex than initially estimated"
+    }
+  ],
+  "tests_added": [],
+  "constraints_discovered": []
+}
