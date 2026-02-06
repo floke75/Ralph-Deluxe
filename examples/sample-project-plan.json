@@ -1,0 +1,112 @@
+{
+  "project": "weather-cli",
+  "branch": "feature/weather-cli",
+  "max_iterations": 30,
+  "validation_strategy": "strict",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Project scaffold and argument parsing",
+      "description": "Create the weather-cli project structure. Write a main script (weather.sh) that parses CLI arguments: --city NAME (required), --units metric|imperial (default: metric), --forecast (show 3-day forecast), --json (output raw JSON), -h/--help. Use getopts-style argument parsing. Create a config file for the API key.",
+      "status": "pending",
+      "order": 1,
+      "skills": ["bash-conventions"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "weather.sh exists and is executable",
+        "bash -n weather.sh passes syntax check",
+        "--help prints usage information",
+        "Missing --city flag prints error and exits 1",
+        "Config file template exists at config/weather.conf.example"
+      ],
+      "depends_on": [],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-002",
+      "title": "API integration with OpenWeatherMap",
+      "description": "Implement the API client module (lib/api.sh) that calls the OpenWeatherMap API. Functions: fetch_current_weather(city, units) and fetch_forecast(city, units, days). Handle HTTP errors, rate limits, and invalid API keys. Parse the JSON response with jq to extract temperature, humidity, wind speed, and description.",
+      "status": "pending",
+      "order": 2,
+      "skills": ["bash-conventions", "jq-patterns"],
+      "needs_docs": true,
+      "libraries": ["openweathermap-api"],
+      "acceptance_criteria": [
+        "lib/api.sh exists with fetch_current_weather and fetch_forecast functions",
+        "Functions return structured JSON output",
+        "HTTP errors produce clear error messages",
+        "Invalid API key returns exit code 2",
+        "Rate limit (429) triggers a retry after delay"
+      ],
+      "depends_on": ["TASK-001"],
+      "max_turns": 20,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-003",
+      "title": "Output formatting and display",
+      "description": "Implement the display module (lib/display.sh) that formats weather data for terminal output. Support two modes: human-readable (default) with colored output and emoji weather icons, and --json mode that outputs raw API data. The human-readable format should show: city name, current temperature, feels-like, humidity, wind, and a weather description line.",
+      "status": "pending",
+      "order": 3,
+      "skills": ["bash-conventions"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "lib/display.sh exists with format_current and format_forecast functions",
+        "Human-readable output includes all specified fields",
+        "--json mode outputs valid JSON",
+        "Forecast mode shows one line per day"
+      ],
+      "depends_on": ["TASK-002"],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-004",
+      "title": "Test suite and error handling",
+      "description": "Write bats-core tests for all modules. Create a mock API server script (tests/mock-api.sh) that returns fixture responses for testing without hitting the real API. Test argument parsing edge cases, API error handling, and output formatting. Add integration tests that run the full CLI with the mock server.",
+      "status": "pending",
+      "order": 4,
+      "skills": ["bash-conventions", "testing-bats"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "bats tests/ runs without failures",
+        "Tests cover argument parsing, API calls, and display formatting",
+        "Mock API server returns realistic fixture data",
+        "At least 15 test cases",
+        "Tests run in under 10 seconds"
+      ],
+      "depends_on": ["TASK-003"],
+      "max_turns": 25,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "TASK-005",
+      "title": "Documentation and install script",
+      "description": "Write README.md with usage examples, installation instructions, and configuration guide. Create an install.sh script that checks for dependencies (bash 4+, jq, curl), copies the config template, and makes weather.sh executable. Add a --version flag to weather.sh.",
+      "status": "pending",
+      "order": 5,
+      "skills": ["bash-conventions", "git-workflow"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "README.md exists with usage examples",
+        "install.sh checks for bash, jq, and curl",
+        "install.sh creates config from template",
+        "weather.sh --version prints version number",
+        "All existing tests still pass"
+      ],
+      "depends_on": ["TASK-004"],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    }
+  ]
+}
