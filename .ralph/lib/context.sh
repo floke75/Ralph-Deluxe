@@ -173,6 +173,84 @@ format_compacted_context() {
     fi
 }
 
+# build_coding_prompt_v2 — Mode-aware prompt assembly using handoff-first context
+# In handoff-only mode: previous handoff narrative IS the context (no compacted context)
+# In handoff-plus-index mode: handoff leads, plus a pointer to the knowledge index file
+build_coding_prompt_v2() {
+    local task_json="$1"
+    local mode="${2:-handoff-only}"
+    local skills_content="$3"
+    local failure_context="$4"
+
+    local handoffs_dir=".ralph/handoffs"
+    local prompt=""
+
+    # === TASK (always) ===
+    prompt+="## Current Task"$'\n'
+    prompt+="$(echo "$task_json" | jq -r '"ID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + (.acceptance_criteria | map("- " + .) | join("\n"))')"$'\n\n'
+
+    # === FAILURE CONTEXT (if retrying) ===
+    if [[ -n "$failure_context" ]]; then
+        prompt+="## Previous Attempt Failed"$'\n'
+        prompt+="$failure_context"$'\n\n'
+    fi
+
+    # === PREVIOUS HANDOFF (always — this is the core) ===
+    local prev_handoff
+    prev_handoff="$(get_prev_handoff_for_mode "$handoffs_dir" "$mode")"
+    if [[ -n "$prev_handoff" ]]; then
+        prompt+="## Handoff from Previous Iteration"$'\n'
+        prompt+="$prev_handoff"$'\n\n'
+    else
+        prompt+="## Context"$'\n'
+        prompt+="This is the first iteration. No previous handoff available."$'\n\n'
+    fi
+
+    # === KNOWLEDGE INDEX POINTER (handoff-plus-index mode only) ===
+    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        prompt+="## Accumulated Knowledge"$'\n'
+        prompt+="A knowledge index of learnings from all previous iterations "
+        prompt+="is available at .ralph/knowledge-index.md. Consult it if you "
+        prompt+="need project history beyond what's in the handoff above."$'\n\n'
+    fi
+
+    # === SKILLS (if any) ===
+    if [[ -n "$skills_content" ]]; then
+        prompt+="## Skills & Conventions"$'\n'
+        prompt+="$skills_content"$'\n\n'
+    fi
+
+    # === OUTPUT INSTRUCTIONS ===
+    local output_instructions
+    output_instructions="$(cat .ralph/templates/coding-prompt-footer.md 2>/dev/null)" || true
+    if [[ -z "$output_instructions" ]]; then
+        output_instructions="## When You're Done
+
+After completing your implementation and verifying the acceptance criteria,
+write a handoff for whoever picks up this project next.
+
+Your output must be valid JSON matching the provided schema.
+
+The \`summary\` field should be a single sentence describing what you accomplished.
+
+The \`freeform\` field is the most important part of your output — write it as
+if briefing a colleague who's picking up tomorrow. Cover:
+
+- What you did and why you made the choices you made
+- Anything that surprised you or didn't go as expected
+- Anything that's fragile, incomplete, or needs attention
+- What you'd recommend the next iteration focus on
+- Key technical details the next person needs to know
+
+The structured fields (task_completed, files_touched, etc.) help the
+orchestrator track progress. The freeform narrative is how the next
+iteration will actually understand what happened."
+    fi
+    prompt+="$output_instructions"
+
+    echo "$prompt"
+}
+
 # build_coding_prompt — Assemble prompt from task JSON + context sections
 # Priority order (highest first): task > output instructions > failure context > skills > previous L2 > compacted context > earlier L1
 build_coding_prompt() {

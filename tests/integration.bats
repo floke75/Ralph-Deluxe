@@ -91,11 +91,13 @@ EOF
 }
 EOF
 
-    # Initialize git repo
+    # Initialize git repo (disable signing for test isolation)
     cd "$TEST_DIR"
     git init --quiet
     git config user.email "test@test.com"
     git config user.name "Test"
+    git config commit.gpgsign false
+    git config tag.gpgsign false
     git add -A
     git commit --quiet -m "initial commit"
 }
@@ -339,4 +341,86 @@ CONF
     local iteration
     iteration="$(jq -r '.current_iteration' "$TEST_DIR/.ralph/state.json")"
     [[ "$iteration" -eq 1 ]]
+}
+
+# --- Mode flag tests ---
+
+@test "ralph.sh defaults to handoff-only mode when no --mode flag given" {
+    cd "$TEST_DIR"
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+
+    # Check state.json for mode
+    local mode
+    mode="$(jq -r '.mode' "$TEST_DIR/.ralph/state.json")"
+    [[ "$mode" == "handoff-only" ]]
+}
+
+@test "ralph.sh --mode handoff-plus-index sets MODE correctly" {
+    cd "$TEST_DIR"
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-plus-index --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+
+    # Check state.json for mode
+    local mode
+    mode="$(jq -r '.mode' "$TEST_DIR/.ralph/state.json")"
+    [[ "$mode" == "handoff-plus-index" ]]
+}
+
+@test "ralph.sh --mode handoff-plus-index shows mode in startup log" {
+    cd "$TEST_DIR"
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-plus-index --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"mode=handoff-plus-index"* ]]
+}
+
+@test "ralph.sh RALPH_MODE config is used when no --mode flag given" {
+    cd "$TEST_DIR"
+    # Set RALPH_MODE in config
+    echo 'RALPH_MODE="handoff-plus-index"' >> "$TEST_DIR/.ralph/config/ralph.conf"
+
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --plan "$TEST_DIR/plan.json" --config "$TEST_DIR/.ralph/config/ralph.conf"
+    [[ "$status" -eq 0 ]]
+
+    local mode
+    mode="$(jq -r '.mode' "$TEST_DIR/.ralph/state.json")"
+    [[ "$mode" == "handoff-plus-index" ]]
+}
+
+@test "ralph.sh --mode flag overrides RALPH_MODE config" {
+    cd "$TEST_DIR"
+    # Set RALPH_MODE in config to handoff-plus-index
+    echo 'RALPH_MODE="handoff-plus-index"' >> "$TEST_DIR/.ralph/config/ralph.conf"
+
+    # But pass --mode handoff-only on CLI
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-only --plan "$TEST_DIR/plan.json" --config "$TEST_DIR/.ralph/config/ralph.conf"
+    [[ "$status" -eq 0 ]]
+
+    local mode
+    mode="$(jq -r '.mode' "$TEST_DIR/.ralph/state.json")"
+    [[ "$mode" == "handoff-only" ]]
+}
+
+@test "ralph.sh in handoff-only mode does not trigger compaction" {
+    cd "$TEST_DIR"
+
+    # Set state to trigger compaction (high byte count and iterations)
+    cat > "$TEST_DIR/.ralph/state.json" <<'EOF'
+{
+  "current_iteration": 5,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 10,
+  "total_handoff_bytes_since_compaction": 100000,
+  "last_task_id": null,
+  "started_at": "2026-02-06T10:00:00Z",
+  "status": "idle",
+  "mode": "handoff-only"
+}
+EOF
+    git add -A && git commit --quiet -m "high compaction state"
+
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-only --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+    # Should NOT contain "Compaction would be triggered"
+    [[ "$output" != *"Compaction would be triggered"* ]]
 }

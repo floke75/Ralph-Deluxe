@@ -292,3 +292,164 @@ teardown() {
     [[ "$skills_pos" -lt "$prev_pos" ]]
     [[ "$prev_pos" -lt "$compacted_pos" ]]
 }
+
+# --- build_coding_prompt_v2 ---
+
+@test "build_coding_prompt_v2 assembles task and handoff sections in handoff-only mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    # Need to cd so the function can find .ralph/templates/
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Current Task"* ]]
+    [[ "$output" == *"TASK-005"* ]]
+    [[ "$output" == *"## Handoff from Previous Iteration"* ]]
+    [[ "$output" == *"git operations module"* ]]
+    [[ "$output" == *"## When You're Done"* ]]
+}
+
+@test "build_coding_prompt_v2 shows first-iteration message when no handoffs exist" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cd "$TEST_DIR"
+
+    # Empty handoffs dir — remove any handoffs
+    rm -f "$TEST_DIR/.ralph/handoffs/"*.json
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Context"* ]]
+    [[ "$output" == *"first iteration"* ]]
+}
+
+@test "build_coding_prompt_v2 includes failure context when retrying" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" "Tests failed: 3 errors in validation.sh"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Previous Attempt Failed"* ]]
+    [[ "$output" == *"Tests failed: 3 errors"* ]]
+}
+
+@test "build_coding_prompt_v2 includes skills when provided" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "# Use set -euo pipefail" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Skills & Conventions"* ]]
+    [[ "$output" == *"set -euo pipefail"* ]]
+}
+
+@test "build_coding_prompt_v2 does NOT include knowledge index pointer in handoff-only mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    # Create the knowledge index file
+    echo "# Knowledge Index" > "$TEST_DIR/.ralph/knowledge-index.md"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"## Accumulated Knowledge"* ]]
+    [[ "$output" != *"knowledge-index.md"* ]]
+}
+
+@test "build_coding_prompt_v2 includes knowledge index pointer in handoff-plus-index mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    # Create the knowledge index file
+    echo "# Knowledge Index" > "$TEST_DIR/.ralph/knowledge-index.md"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Accumulated Knowledge"* ]]
+    [[ "$output" == *"knowledge-index.md"* ]]
+}
+
+@test "build_coding_prompt_v2 omits knowledge index pointer when file missing in handoff-plus-index mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    # No knowledge-index.md file
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"## Accumulated Knowledge"* ]]
+}
+
+@test "build_coding_prompt_v2 uses get_prev_handoff_for_mode for context" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    # In handoff-plus-index mode, should include structured context
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Structured context from previous iteration"* ]]
+    [[ "$output" == *"TASK-003"* ]]
+}
+
+@test "build_coding_prompt_v2 priority order: task > failure > handoff > knowledge > skills > output" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    echo "# Knowledge Index" > "$TEST_DIR/.ralph/knowledge-index.md"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "skills content" "failure info"
+    [[ "$status" -eq 0 ]]
+
+    local task_pos failure_pos handoff_pos knowledge_pos skills_pos output_pos
+    task_pos=$(echo "$output" | grep -n "## Current Task" | head -1 | cut -d: -f1)
+    failure_pos=$(echo "$output" | grep -n "## Previous Attempt Failed" | head -1 | cut -d: -f1)
+    handoff_pos=$(echo "$output" | grep -n "## Handoff from Previous Iteration" | head -1 | cut -d: -f1)
+    knowledge_pos=$(echo "$output" | grep -n "## Accumulated Knowledge" | head -1 | cut -d: -f1)
+    skills_pos=$(echo "$output" | grep -n "## Skills" | head -1 | cut -d: -f1)
+    output_pos=$(echo "$output" | grep -n "## When You're Done" | head -1 | cut -d: -f1)
+
+    [[ "$task_pos" -lt "$failure_pos" ]]
+    [[ "$failure_pos" -lt "$handoff_pos" ]]
+    [[ "$handoff_pos" -lt "$knowledge_pos" ]]
+    [[ "$knowledge_pos" -lt "$skills_pos" ]]
+    [[ "$skills_pos" -lt "$output_pos" ]]
+}
