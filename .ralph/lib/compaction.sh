@@ -158,10 +158,76 @@ run_knowledge_indexer() {
         return 1
     fi
 
+    if ! verify_knowledge_index "${RALPH_DIR:-.ralph}/knowledge-index.json"; then
+        log "error" "Knowledge index verification failed"
+        return 1
+    fi
+
     # Update compaction state counters
     update_compaction_state "$state_file"
 
     log "info" "--- Knowledge indexer end ---"
+}
+
+
+# verify_knowledge_index — Validate knowledge-index.json consistency
+# Checks:
+# - no duplicate active memory IDs
+# - supersedes references target existing memory IDs
+verify_knowledge_index() {
+    local knowledge_index_json="${1:-${RALPH_DIR:-.ralph}/knowledge-index.json}"
+
+    if [[ ! -f "$knowledge_index_json" ]]; then
+        log "debug" "knowledge-index.json not found, skipping verification"
+        return 0
+    fi
+
+    if ! jq -e 'type == "array"' "$knowledge_index_json" >/dev/null 2>&1; then
+        log "error" "knowledge-index.json must be a JSON array"
+        return 1
+    fi
+
+    local duplicate_active_ids
+    duplicate_active_ids=$(jq -r '
+      [ .[]
+        | select((.status // "active") == "active")
+        | (.memory_ids // [])[]?
+        | strings
+      ]
+      | group_by(.)
+      | map(select(length > 1) | .[0])
+      | join(",")
+    ' "$knowledge_index_json")
+
+    if [[ -n "$duplicate_active_ids" ]]; then
+        log "error" "knowledge-index.json has duplicate active memory_ids: ${duplicate_active_ids}"
+        return 1
+    fi
+
+    declare -A id_set=()
+    local memory_id
+    while IFS= read -r memory_id; do
+        [[ -z "$memory_id" ]] && continue
+        id_set["$memory_id"]=1
+    done < <(jq -r '.[] | (.memory_ids // [])[]? | strings' "$knowledge_index_json" | sort -u)
+
+    local -a missing_targets=()
+    local target
+    while IFS= read -r target; do
+        [[ -z "$target" ]] && continue
+        if [[ -z "${id_set[$target]+x}" ]]; then
+            missing_targets+=("$target")
+        fi
+    done < <(jq -r '.[] | .supersedes? // empty | if type == "array" then .[] else . end | strings' "$knowledge_index_json")
+
+    if (( ${#missing_targets[@]} > 0 )); then
+        local missing_csv
+        missing_csv=$(printf '%s\n' "${missing_targets[@]}" | sort -u | paste -sd',' -)
+        log "error" "knowledge-index.json has supersedes references to unknown memory_ids: ${missing_csv}"
+        return 1
+    fi
+
+    return 0
 }
 
 # update_compaction_state — Reset counters in state.json after compaction

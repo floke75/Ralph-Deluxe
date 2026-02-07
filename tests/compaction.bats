@@ -404,3 +404,39 @@ EOF
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"Knowledge indexer failed"* ]]
 }
+
+# --- verify_knowledge_index ---
+
+@test "verify_knowledge_index accepts legacy schema for backward compatibility" {
+    local index_file="$TEST_DIR/knowledge-index.json"
+    cp "$TEST_DIR/fixtures/knowledge-index-legacy.json" "$index_file"
+
+    run verify_knowledge_index "$index_file"
+    [[ "$status" -eq 0 ]]
+}
+
+@test "verify_knowledge_index accepts valid modern schema" {
+    local index_file="$TEST_DIR/knowledge-index.json"
+    cp "$TEST_DIR/fixtures/knowledge-index-modern-valid.json" "$index_file"
+
+    run verify_knowledge_index "$index_file"
+    [[ "$status" -eq 0 ]]
+}
+
+@test "verify_knowledge_index rejects duplicate active memory IDs" {
+    local index_file="$TEST_DIR/knowledge-index.json"
+    cp "$TEST_DIR/fixtures/knowledge-index-modern-duplicate-active.json" "$index_file"
+
+    run verify_knowledge_index "$index_file"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"duplicate active memory_ids"* ]]
+}
+
+@test "verify_knowledge_index rejects supersedes references to unknown IDs" {
+    local index_file="$TEST_DIR/knowledge-index.json"
+    cp "$TEST_DIR/fixtures/knowledge-index-modern-missing-supersedes-target.json" "$index_file"
+
+    run verify_knowledge_index "$index_file"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"supersedes references to unknown memory_ids"* ]]
+}
