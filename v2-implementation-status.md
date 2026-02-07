@@ -1,6 +1,6 @@
 # Ralph-Deluxe v2 — Implementation Status
 
-**Last verified:** 2026-02-07 (PR 6)
+**Last verified:** 2026-02-07 (PR 7)
 **Verified against:** `ralph-deluxe-v2-revision-plan 2.md`
 
 ---
@@ -112,14 +112,16 @@
 
 ---
 
-## PR 7: Documentation and Cleanup — NOT STARTED
+## PR 7: Documentation and Cleanup — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| README.md update | Mode documentation | Not done |
-| CLAUDE.md update | v2 conventions | Not done |
-| Dashboard usage instructions | New section | Not done |
-| Archive v1 plan | Document v2 rationale | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| README.md update | Mode documentation | Done | Full rewrite: handoff-first framing, Operating Modes section, Dashboard section with serve.py instructions, updated features list, updated directory structure, telemetry section, handoff schema section, v2 design rationale section |
+| CLAUDE.md update | v2 conventions | Done | Updated overview, added Operating Modes, Handoff Schema, Telemetry, Dashboard, and control directory sections; added `// "default"` jq convention |
+| Dashboard usage instructions | New section | Done | Included in README.md Dashboard section: serve.py usage, panel descriptions, control plane actions |
+| Archive v1 plan | Document v2 rationale | Done | Added archive header to Ralph_Deluxe_Plan.md noting v2 supersession; v2 rationale in README.md |
+
+**Completion: 100%** — All documentation updated. README reflects handoff-first design, both modes, dashboard, and telemetry.
 
 ---
 
@@ -133,4 +135,4 @@
 | PR 4 | Telemetry module | Implemented |
 | PR 5 | Dashboard (read-only) | Implemented |
 | PR 6 | Control plane | Implemented |
-| PR 7 | Documentation | Not started |
+| PR 7 | Documentation | Implemented |

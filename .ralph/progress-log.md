@@ -171,10 +171,25 @@ This is a working reference file — not a handoff prompt. For current status, s
 
 ---
 
-## PR 7: Documentation and Cleanup — NOT STARTED
+## PR 7: Documentation and Cleanup — IMPLEMENTED
 
-**Planned work:**
-- README.md update with mode documentation
-- CLAUDE.md update with v2 conventions
-- Dashboard usage instructions
-- Archive v1 plan, document v2 rationale
+**Files changed (3 files):**
+
+| File | Change |
+|------|--------|
+| `README.md` | Full rewrite: handoff-first framing in description and features list; new Operating Modes section documenting both modes; new Dashboard section with serve.py startup instructions, panel descriptions, and control plane actions; updated CLI Options (added `--mode`); updated Configuration table (added `RALPH_MODE`); updated Directory Structure reflecting all v2 additions (serve.py, dashboard.html, telemetry.sh, control/, knowledge-index files, events.jsonl); updated How It Works flow (12 steps including telemetry and control commands); new Handoff Schema, Knowledge Indexer, and Telemetry subsections; new v2 Design Rationale section; added Python 3 to prerequisites |
+| `CLAUDE.md` | Updated Overview to handoff-first framing with two modes; added Operating Modes, Handoff Schema, Telemetry, Dashboard sections; expanded Directory Structure with all v2 files; added `// "default"` jq convention |
+| `Ralph_Deluxe_Plan.md` | Added archive header documenting v2 supersession: explains the five key v2 changes, notes that L1/L2/L3 compaction is preserved for backward compatibility, and points to `ralph-deluxe-v2-revision-plan 2.md` for the v2 spec |
+
+**Design decisions:**
+- **README is the primary user-facing doc**: Full rewrite rather than incremental additions. Organized around v2 concepts (modes, dashboard, handoff narrative) as the primary framing, with legacy compaction mentioned only in the v2 rationale section
+- **CLAUDE.md matches the system prompt version**: The CLAUDE.md that was already being used as the system prompt (from prior PRs) was the v2 version. This PR brings the on-disk CLAUDE.md into alignment
+- **v1 plan archived in place**: Rather than moving Ralph_Deluxe_Plan.md to a subdirectory, added a prominent archive header. The file stays at the same path for existing links/references but is clearly marked as superseded
+
+**Acceptance criteria met:**
+- README.md documents both operating modes with usage examples
+- README.md includes dashboard startup instructions (serve.py)
+- README.md feature list uses handoff-first framing
+- CLAUDE.md reflects v2 conventions (telemetry, dashboard, modes, knowledge indexer, control commands)
+- Ralph_Deluxe_Plan.md has archive header pointing to v2 revision plan
+- v2-implementation-status.md has PR 7 marked IMPLEMENTED with all items Done
