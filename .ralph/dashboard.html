@@ -21,8 +21,9 @@
 <script>
 // ============================================================
 // Ralph Deluxe Dashboard — Single-file vanilla JS + Tailwind
-// Read-only view. Polls local files every 3 seconds.
-// Serve via: python3 -m http.server 8080
+// Polls local files every 3 seconds. Control plane writes
+// commands via POST to serve.py.
+// Serve via: python3 .ralph/serve.py --port 8080
 // Then open: http://localhost:8080/.ralph/dashboard.html
 // ============================================================
 
@@ -48,6 +49,53 @@ const state = {
   viewMode: null, // null = use orchestrator mode; set by toggle
   error: null
 };
+
+// --- Form State (persisted across full-rebuild render cycles) ---
+const formState = {
+  noteText: "",
+  settingsOpen: false,
+  controlOpen: true,
+  lastCommandStatus: null, // { ok: bool, message: string, ts: number }
+};
+
+// --- API Helpers ---
+async function postCommand(cmdObj) {
+  try {
+    const resp = await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cmdObj)
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      formState.lastCommandStatus = { ok: true, message: `${cmdObj.command} sent`, ts: Date.now() };
+    } else {
+      formState.lastCommandStatus = { ok: false, message: data.error || "Failed", ts: Date.now() };
+    }
+  } catch (err) {
+    formState.lastCommandStatus = { ok: false, message: err.message, ts: Date.now() };
+  }
+  render();
+}
+
+async function postSettings(settings) {
+  try {
+    const resp = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings)
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      formState.lastCommandStatus = { ok: true, message: `Updated: ${(data.updated || []).join(", ")}`, ts: Date.now() };
+    } else {
+      formState.lastCommandStatus = { ok: false, message: data.error || "Failed", ts: Date.now() };
+    }
+  } catch (err) {
+    formState.lastCommandStatus = { ok: false, message: err.message, ts: Date.now() };
+  }
+  render();
+}
 
 // --- Fetch Helpers ---
 // Base path: dashboard lives at .ralph/dashboard.html, project root is ../
@@ -309,10 +357,19 @@ function TaskPlan() {
     row.appendChild(h("span", {
       className: `flex-1 text-sm ${
         task.status === "done" ? "text-zinc-500 line-through" :
+        task.status === "skipped" ? "text-zinc-600 line-through" :
         isCurrent ? "text-zinc-200" : "text-zinc-400"
       }`
     }, task.title));
     row.appendChild(StatusBadge(task.status));
+    if (task.status === "pending") {
+      const taskIdForSkip = task.id;
+      row.appendChild(h("button", {
+        className: "ml-1 px-1.5 py-0.5 rounded text-xs text-zinc-600 hover:text-red-400 hover:bg-red-950/30 border border-transparent hover:border-red-900/50 transition-colors",
+        title: `Skip ${task.id}`,
+        onClick: (e) => { e.stopPropagation(); postCommand({ command: "skip-task", task_id: taskIdForSkip }); }
+      }, "\u00D7"));
+    }
     list.appendChild(row);
   }
   panel.appendChild(list);
@@ -750,6 +807,141 @@ function EventLog() {
   return panel;
 }
 
+function ControlPlane() {
+  const status = state.orchestrator.status || "idle";
+  const isPaused = status === "paused" ||
+    state.events.some(e => e.event === "pause" &&
+      !state.events.some(r => r.event === "resume" &&
+        new Date(r.timestamp) > new Date(e.timestamp)));
+
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  // Header with toggle
+  const header = h("div", {
+    className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between cursor-pointer",
+    onClick: () => { formState.controlOpen = !formState.controlOpen; render(); }
+  });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Control Plane"));
+  header.appendChild(h("span", { className: "text-xs text-zinc-500" }, formState.controlOpen ? "\u25B2" : "\u25BC"));
+  panel.appendChild(header);
+
+  if (!formState.controlOpen) return panel;
+
+  const body = h("div", { className: "p-4 space-y-4" });
+
+  // Command status flash
+  if (formState.lastCommandStatus && (Date.now() - formState.lastCommandStatus.ts) < 5000) {
+    const cs = formState.lastCommandStatus;
+    body.appendChild(h("div", {
+      className: `text-xs px-3 py-1.5 rounded ${cs.ok ? "bg-emerald-950/50 text-emerald-400 border border-emerald-900/50" : "bg-red-950/50 text-red-400 border border-red-900/50"}`
+    }, cs.message));
+  }
+
+  // Pause / Resume toggle
+  const pauseRow = h("div", { className: "flex items-center gap-3" });
+  pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider w-20" }, "Execution"));
+  if (isPaused) {
+    pauseRow.appendChild(h("button", {
+      className: "px-3 py-1.5 rounded text-xs font-medium bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 hover:bg-emerald-800/60 transition-colors",
+      onClick: () => postCommand({ command: "resume" })
+    }, "Resume"));
+    pauseRow.appendChild(h("span", { className: "text-xs text-orange-400" }, "Paused"));
+  } else {
+    pauseRow.appendChild(h("button", {
+      className: "px-3 py-1.5 rounded text-xs font-medium bg-orange-900/60 text-orange-300 border border-orange-700/50 hover:bg-orange-800/60 transition-colors",
+      onClick: () => postCommand({ command: "pause" })
+    }, "Pause"));
+    pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500" }, "Running"));
+  }
+  body.appendChild(pauseRow);
+
+  // Inject note
+  const noteSection = h("div", { className: "space-y-2" });
+  noteSection.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider" }, "Inject Note"));
+
+  const noteRow = h("div", { className: "flex gap-2" });
+  const textarea = h("textarea", {
+    className: "flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-300 resize-none focus:border-blue-600 focus:outline-none",
+    rows: "2",
+    placeholder: "Send a note to the orchestrator...",
+    value: formState.noteText
+  });
+  // Preserve textarea state across renders
+  textarea.value = formState.noteText;
+  textarea.addEventListener("input", (e) => { formState.noteText = e.target.value; });
+
+  noteRow.appendChild(textarea);
+  noteRow.appendChild(h("button", {
+    className: "px-3 py-1.5 rounded text-xs font-medium bg-violet-900/60 text-violet-300 border border-violet-700/50 hover:bg-violet-800/60 transition-colors self-end",
+    onClick: () => {
+      if (formState.noteText.trim()) {
+        postCommand({ command: "inject-note", note: formState.noteText.trim() });
+        formState.noteText = "";
+      }
+    }
+  }, "Send"));
+  noteSection.appendChild(noteRow);
+  body.appendChild(noteSection);
+
+  panel.appendChild(body);
+  return panel;
+}
+
+function SettingsPanel() {
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  const header = h("div", {
+    className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between cursor-pointer",
+    onClick: () => { formState.settingsOpen = !formState.settingsOpen; render(); }
+  });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Settings"));
+  header.appendChild(h("span", { className: "text-xs text-zinc-500" }, formState.settingsOpen ? "\u25B2" : "\u25BC"));
+  panel.appendChild(header);
+
+  if (!formState.settingsOpen) return panel;
+
+  const body = h("div", { className: "p-4 space-y-3" });
+
+  const settings = [
+    { key: "RALPH_MODE", label: "Mode", options: ["handoff-only", "handoff-plus-index"], current: state.orchestrator.mode || "handoff-only" },
+    { key: "RALPH_VALIDATION_STRATEGY", label: "Validation", options: ["strict", "lenient", "tests_only"], current: "strict" },
+    { key: "RALPH_COMPACTION_INTERVAL", label: "Compaction Interval", options: ["3", "5", "8", "10"], current: "5" },
+    { key: "RALPH_DEFAULT_MAX_TURNS", label: "Max Turns", options: ["10", "15", "20", "30"], current: "20" },
+    { key: "RALPH_MIN_DELAY_SECONDS", label: "Delay (sec)", options: ["0", "10", "30", "60"], current: "30" },
+  ];
+
+  for (const s of settings) {
+    const row = h("div", { className: "flex items-center gap-3" });
+    row.appendChild(h("span", { className: "text-xs text-zinc-500 w-32 flex-shrink-0" }, s.label));
+
+    const select = h("select", {
+      className: "bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 focus:border-blue-600 focus:outline-none"
+    });
+    for (const opt of s.options) {
+      const option = h("option", { value: opt }, opt);
+      if (opt === s.current) option.selected = true;
+      select.appendChild(option);
+    }
+
+    const settingKey = s.key;
+    select.addEventListener("change", (e) => {
+      const obj = {};
+      obj[settingKey] = e.target.value;
+      postSettings(obj);
+    });
+
+    row.appendChild(select);
+    body.appendChild(row);
+  }
+
+  body.appendChild(h("div", { className: "text-xs text-zinc-600 italic pt-1" },
+    "Changes apply on next orchestrator iteration. Mode changes take effect on restart."
+  ));
+
+  panel.appendChild(body);
+  return panel;
+}
+
 // --- Main Render ---
 function render() {
   const app = document.getElementById("app");
@@ -810,11 +1002,13 @@ function render() {
 
     const grid = h("div", { className: "grid grid-cols-1 lg:grid-cols-3 gap-4" });
 
-    // Left column: TaskPlan + GitTimeline + EventLog
+    // Left column: TaskPlan + ControlPlane + GitTimeline + EventLog + Settings
     const leftCol = h("div", { className: "lg:col-span-1 space-y-4" });
     leftCol.appendChild(TaskPlan());
+    leftCol.appendChild(ControlPlane());
     leftCol.appendChild(GitTimeline());
     leftCol.appendChild(EventLog());
+    leftCol.appendChild(SettingsPanel());
     grid.appendChild(leftCol);
 
     // Right column: HandoffViewer + KnowledgeIndex
@@ -857,9 +1051,10 @@ if (window.location.protocol === "file:") {
     <div style="padding: 40px; font-family: monospace; color: #a1a1aa; max-width: 600px; margin: 0 auto;">
       <h1 style="color: #60a5fa; font-size: 18px; margin-bottom: 16px;">Ralph Deluxe Dashboard</h1>
       <p style="color: #ef4444; margin-bottom: 12px;">Cannot poll files via file:// protocol.</p>
-      <p style="margin-bottom: 12px;">Serve the project root with a local HTTP server:</p>
+      <p style="margin-bottom: 12px;">Serve the project root with the Ralph server (enables control plane):</p>
       <pre style="background: #18181b; padding: 12px; border-radius: 6px; border: 1px solid #27272a; color: #e4e4e7;">cd ${window.location.pathname.replace("/.ralph/dashboard.html", "") || "your-project-root"}
-python3 -m http.server 8080</pre>
+python3 .ralph/serve.py --port 8080</pre>
+      <p style="margin-top: 8px; color: #71717a; font-size: 12px;">Or for read-only mode: <code style="color: #a1a1aa;">python3 -m http.server 8080</code></p>
       <p style="margin-top: 12px;">Then open: <a href="http://localhost:8080/.ralph/dashboard.html" style="color: #60a5fa;">http://localhost:8080/.ralph/dashboard.html</a></p>
     </div>
   `;
