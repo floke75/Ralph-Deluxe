@@ -76,6 +76,41 @@ teardown() {
     [[ "$status" -eq 1 ]]
 }
 
+
+@test "check_compaction_trigger does not fire novelty trigger on high overlap" {
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    cp "$TEST_DIR/fixtures/sample-handoff.json" "$TEST_DIR/.ralph/handoffs/handoff-001.json"
+    cp "$TEST_DIR/fixtures/sample-handoff-002.json" "$TEST_DIR/.ralph/handoffs/handoff-002.json"
+    export RALPH_DIR="$TEST_DIR/.ralph"
+
+    local task_json='{"title":"Implement git rollback helpers","description":"Add git clean reset and checkpoint rollback to git operations module","libraries":[]}'
+    run check_compaction_trigger "$TEST_DIR/fixtures/sample-state-below-threshold.json" "$task_json"
+    [[ "$status" -eq 1 ]]
+}
+
+@test "check_compaction_trigger fires novelty trigger on low overlap" {
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    cp "$TEST_DIR/fixtures/sample-handoff.json" "$TEST_DIR/.ralph/handoffs/handoff-001.json"
+    cp "$TEST_DIR/fixtures/sample-handoff-002.json" "$TEST_DIR/.ralph/handoffs/handoff-002.json"
+    export RALPH_DIR="$TEST_DIR/.ralph"
+
+    local task_json='{"title":"Create websocket telemetry dashboard","description":"Build streaming metrics panel for browser clients","libraries":[]}'
+    run check_compaction_trigger "$TEST_DIR/fixtures/sample-state-below-threshold.json" "$task_json"
+    [[ "$status" -eq 0 ]]
+}
+
+@test "check_compaction_trigger metadata trigger has priority over novelty" {
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    cp "$TEST_DIR/fixtures/sample-handoff.json" "$TEST_DIR/.ralph/handoffs/handoff-001.json"
+    cp "$TEST_DIR/fixtures/sample-handoff-002.json" "$TEST_DIR/.ralph/handoffs/handoff-002.json"
+    export RALPH_DIR="$TEST_DIR/.ralph"
+
+    local task_json='{"needs_docs": true, "title":"Create websocket telemetry dashboard", "description":"Build streaming metrics panel for browser clients", "libraries":[]}'
+    run check_compaction_trigger "$TEST_DIR/fixtures/sample-state-below-threshold.json" "$task_json"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"task metadata"* ]]
+}
+
 # --- extract_l1 ---
 
 @test "extract_l1 produces one-line summary with task ID" {

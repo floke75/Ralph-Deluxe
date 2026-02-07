@@ -7,13 +7,67 @@ set -euo pipefail
 # Source config defaults if not already loaded
 RALPH_COMPACTION_THRESHOLD_BYTES="${RALPH_COMPACTION_THRESHOLD_BYTES:-32000}"
 RALPH_COMPACTION_INTERVAL="${RALPH_COMPACTION_INTERVAL:-5}"
+RALPH_NOVELTY_OVERLAP_THRESHOLD="${RALPH_NOVELTY_OVERLAP_THRESHOLD:-0.25}"
+RALPH_NOVELTY_RECENT_HANDOFFS="${RALPH_NOVELTY_RECENT_HANDOFFS:-3}"
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# check_compaction_trigger — Evaluate three triggers in order
+tokenize_terms() {
+    local text="$1"
+    echo "$text" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/ /g' \
+        | tr ' ' '\n' \
+        | sed '/^$/d' \
+        | awk 'length($0) > 2' \
+        | sort -u
+}
+
+build_task_term_signature() {
+    local task_json="$1"
+    local task_text
+    task_text=$(echo "$task_json" | jq -r '[.title // "", .description // "", (.libraries // [] | join(" "))] | join(" ")')
+    tokenize_terms "$task_text"
+}
+
+build_recent_handoff_term_signature() {
+    local handoffs_dir="$1"
+    local handoff_limit="$2"
+
+    if [[ ! -d "$handoffs_dir" ]]; then
+        return 0
+    fi
+
+    local summaries=""
+    while IFS= read -r handoff_file; do
+        local summary
+        summary=$(jq -r '[.summary?, .task_completed.summary?, .freeform?] | map(select(type == "string" and length > 0)) | join(" ")' "$handoff_file" 2>/dev/null || true)
+        summaries+=" ${summary}"
+    done < <(ls -1 "$handoffs_dir"/handoff-* 2>/dev/null | sort -V | tail -n "$handoff_limit")
+
+    tokenize_terms "$summaries"
+}
+
+calculate_term_overlap() {
+    local task_terms="$1"
+    local handoff_terms="$2"
+
+    local task_count
+    task_count=$(echo "$task_terms" | sed '/^$/d' | wc -l)
+    if [[ "$task_count" -eq 0 ]]; then
+        echo "0"
+        return 0
+    fi
+
+    local intersection
+    intersection=$(comm -12 <(echo "$task_terms") <(echo "$handoff_terms") | sed '/^$/d' | wc -l)
+    awk -v i="$intersection" -v t="$task_count" 'BEGIN { if (t == 0) print 0; else printf "%.4f", i / t }'
+}
+
+# check_compaction_trigger — Evaluate triggers in order
 # Returns 0 if compaction needed, 1 if not. Logs which trigger fired.
 check_compaction_trigger() {
     local state_file="${1:-.ralph/state.json}"
@@ -32,7 +86,25 @@ check_compaction_trigger() {
         fi
     fi
 
-    # Trigger 2: Threshold-based — handoff bytes since compaction > threshold
+    # Trigger 2: Novelty-based — low overlap with recent handoff summaries
+    if [[ -n "$next_task_json" ]]; then
+        local handoffs_dir="${RALPH_DIR:-$(dirname "$state_file")}/handoffs"
+        local task_terms
+        task_terms="$(build_task_term_signature "$next_task_json")"
+        local handoff_terms
+        handoff_terms="$(build_recent_handoff_term_signature "$handoffs_dir" "$RALPH_NOVELTY_RECENT_HANDOFFS")"
+
+        if [[ -n "$task_terms" ]] && [[ -n "$handoff_terms" ]]; then
+            local overlap
+            overlap="$(calculate_term_overlap "$task_terms" "$handoff_terms")"
+            if awk -v o="$overlap" -v threshold="$RALPH_NOVELTY_OVERLAP_THRESHOLD" 'BEGIN { exit !(o < threshold) }'; then
+                log "info" "Compaction trigger: novelty (overlap=${overlap} < ${RALPH_NOVELTY_OVERLAP_THRESHOLD})"
+                return 0
+            fi
+        fi
+    fi
+
+    # Trigger 3: Threshold-based — handoff bytes since compaction > threshold
     local handoff_bytes
     handoff_bytes=$(jq -r '.total_handoff_bytes_since_compaction // 0' "$state_file")
     if [[ "$handoff_bytes" -gt "$RALPH_COMPACTION_THRESHOLD_BYTES" ]]; then
@@ -40,7 +112,7 @@ check_compaction_trigger() {
         return 0
     fi
 
-    # Trigger 3: Periodic — coding iterations since compaction >= interval
+    # Trigger 4: Periodic — coding iterations since compaction >= interval
     local iterations_since
     iterations_since=$(jq -r '.coding_iterations_since_compaction // 0' "$state_file")
     if [[ "$iterations_since" -ge "$RALPH_COMPACTION_INTERVAL" ]]; then
