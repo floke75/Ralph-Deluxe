@@ -231,6 +231,89 @@ format_compacted_context() {
     fi
 }
 
+# retrieve_relevant_knowledge — Pull a bounded set of relevant lines from the knowledge index
+# Relevance is based on task id, title/description keywords, and listed libraries.
+# Category priority: Constraints > Architectural Decisions > Unresolved > Gotchas > Patterns
+retrieve_relevant_knowledge() {
+    local task_json="$1"
+    local index_file="${2:-.ralph/knowledge-index.md}"
+    local max_lines="${3:-12}"
+
+    if [[ ! -f "$index_file" ]]; then
+        echo ""
+        return
+    fi
+
+    local task_id task_title task_description terms_csv
+    task_id=$(echo "$task_json" | jq -r '.id // ""')
+    task_title=$(echo "$task_json" | jq -r '.title // ""')
+    task_description=$(echo "$task_json" | jq -r '.description // ""')
+
+    terms_csv=$(echo "$task_json" | jq -r --arg title "$task_title" --arg desc "$task_description" --arg id "$task_id" '
+        [
+            ($id | ascii_downcase),
+            (.libraries // [] | .[]? | ascii_downcase),
+            (($title + " " + $desc)
+                | ascii_downcase
+                | gsub("[^a-z0-9 ]"; " ")
+                | split(" ")
+                | map(select(length >= 4))
+                | .[])
+        ]
+        | map(select(length > 0))
+        | unique
+        | .[0:40]
+        | join(",")
+    ')
+
+    if [[ -z "$terms_csv" ]]; then
+        echo ""
+        return
+    fi
+
+    awk -v terms="$terms_csv" '
+        BEGIN {
+            split(terms, raw_terms, ",");
+            for (i in raw_terms) {
+                if (length(raw_terms[i]) > 0) query[raw_terms[i]] = 1;
+            }
+
+            priority["constraints"] = 1;
+            priority["architectural decisions"] = 2;
+            priority["unresolved"] = 3;
+            priority["gotchas"] = 4;
+            priority["patterns"] = 5;
+            current = "";
+        }
+        /^##[[:space:]]+/ {
+            heading = tolower($0);
+            sub(/^##[[:space:]]+/, "", heading);
+            gsub(/[[:space:]]+$/, "", heading);
+            current = heading;
+            next;
+        }
+        {
+            if (current == "" || !(current in priority)) next;
+
+            line = $0;
+            if (line ~ /^[[:space:]]*$/) next;
+
+            low = tolower(line);
+            matched = 0;
+            for (term in query) {
+                if (index(low, term) > 0) {
+                    matched = 1;
+                    break;
+                }
+            }
+
+            if (matched) {
+                printf "%d\t%d\t%s\n", priority[current], NR, line;
+            }
+        }
+    ' "$index_file" | sort -t $'\t' -k1,1n -k2,2n | cut -f3- | head -n "$max_lines"
+}
+
 # build_coding_prompt_v2 — Mode-aware prompt assembly using handoff-first context
 # In handoff-only mode: previous handoff narrative IS the context (no compacted context)
 # In handoff-plus-index mode: handoff leads, plus a pointer to the knowledge index file
@@ -281,6 +364,24 @@ This is the first iteration. No previous handoff available."
 ${narrative}"
     fi
 
+    # === RETRIEVED PROJECT MEMORY (handoff-plus-index mode only) ===
+    local retrieved_project_memory_section=""
+    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        local retrieved_project_memory
+        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
+        if [[ -n "$retrieved_project_memory" ]]; then
+            retrieved_project_memory_section="## Retrieved Project Memory
+${retrieved_project_memory}"
+        fi
+    fi
+
+    # === KNOWLEDGE INDEX POINTER (handoff-plus-index mode only) ===
+    local accumulated_knowledge_section=""
+    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        accumulated_knowledge_section="## Accumulated Knowledge
+A knowledge index of learnings from all previous iterations is available at .ralph/knowledge-index.md. Consult it if you need project history beyond what's in the handoff above."
+    fi
+
     local skills_section="## Skills
 No specific skills loaded."
     if [[ -n "$skills_content" ]]; then
@@ -321,6 +422,12 @@ ${output_instructions}"
     prompt+="$failure_section"$'\n\n'
     prompt+="$retrieved_memory_section"$'\n\n'
     prompt+="$previous_handoff_section"$'\n\n'
+    if [[ -n "$retrieved_project_memory_section" ]]; then
+        prompt+="$retrieved_project_memory_section"$'\n\n'
+    fi
+    if [[ -n "$accumulated_knowledge_section" ]]; then
+        prompt+="$accumulated_knowledge_section"$'\n\n'
+    fi
     prompt+="$skills_section"$'\n\n'
     prompt+="$output_section"
 

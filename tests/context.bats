@@ -475,6 +475,81 @@ EOF
     [[ "$output" == *"knowledge-index.md"* ]]
 }
 
+@test "build_coding_prompt_v2 includes retrieved project memory lines relevant to task" {
+    local task_json
+    task_json='{
+      "id": "TASK-321",
+      "title": "Fix jq parsing bug in context assembly",
+      "description": "Adjust parser behavior for jq and bash orchestration scripts.",
+      "libraries": ["jq", "bash"],
+      "acceptance_criteria": ["Relevant memory should be included"]
+    }'
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cat > "$TEST_DIR/.ralph/knowledge-index.md" <<'EOF'
+# Knowledge Index
+
+## Constraints
+- jq output must stay JSON-safe for TASK-321 migration logic.
+- Keep bash compatibility with existing shellcheck rules.
+
+## Architectural Decisions
+- Use jq streaming mode when handling large orchestration payloads.
+
+## Gotchas
+- Some regex escapes in awk break jq filter extraction.
+EOF
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Retrieved Project Memory"* ]]
+    [[ "$output" == *"TASK-321 migration logic"* ]]
+    [[ "$output" == *"jq streaming mode"* ]]
+}
+
+@test "retrieve_relevant_knowledge truncates output to max lines" {
+    local task_json
+    task_json='{
+      "id": "TASK-777",
+      "title": "Harden parser",
+      "description": "Improve parser reliability for orchestration runtime",
+      "libraries": ["jq"]
+    }'
+
+    mkdir -p "$TEST_DIR/.ralph"
+    {
+        echo "# Knowledge Index"
+        echo ""
+        echo "## Constraints"
+        for i in $(seq 1 20); do
+            echo "- TASK-777 constraint line $i about jq parser behavior"
+        done
+    } > "$TEST_DIR/.ralph/knowledge-index.md"
+
+    run retrieve_relevant_knowledge "$task_json" "$TEST_DIR/.ralph/knowledge-index.md" 8
+    [[ "$status" -eq 0 ]]
+    local line_count
+    line_count=$(echo "$output" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]')
+    [[ "$line_count" -eq 8 ]]
+}
+
+@test "build_coding_prompt_v2 omits retrieved project memory when knowledge index is missing" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"## Retrieved Project Memory"* ]]
+}
+
 @test "build_coding_prompt_v2 omits knowledge index pointer when file missing in handoff-plus-index mode" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
@@ -507,30 +582,39 @@ EOF
     [[ "$output" == *"### Decisions"* ]]
 }
 
-@test "build_coding_prompt_v2 priority order: task > failure > handoff > knowledge > skills > output" {
+@test "build_coding_prompt_v2 priority order: task > failure > handoff > retrieved > knowledge > skills > output" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
     mkdir -p "$TEST_DIR/.ralph/handoffs"
     mkdir -p "$TEST_DIR/.ralph/templates"
     cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
-    echo "# Knowledge Index" > "$TEST_DIR/.ralph/knowledge-index.md"
+    cat > "$TEST_DIR/.ralph/knowledge-index.md" <<'EOF'
+# Knowledge Index
+
+## Constraints
+- TASK-005 context assembly must preserve ordering in prompts.
+EOF
     cd "$TEST_DIR"
 
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "skills content" "failure info"
     [[ "$status" -eq 0 ]]
 
-    local task_pos failure_pos handoff_pos knowledge_pos skills_pos output_pos
+    local task_pos failure_pos retrieved_memory_pos handoff_pos retrieved_pos knowledge_pos skills_pos output_pos
     task_pos=$(echo "$output" | grep -n "## Current Task" | head -1 | cut -d: -f1)
     failure_pos=$(echo "$output" | grep -n "## Failure Context" | head -1 | cut -d: -f1)
+    retrieved_memory_pos=$(echo "$output" | grep -n "## Retrieved Memory" | head -1 | cut -d: -f1)
     handoff_pos=$(echo "$output" | grep -n "## Previous Handoff" | head -1 | cut -d: -f1)
-    knowledge_pos=$(echo "$output" | grep -n "## Retrieved Memory" | head -1 | cut -d: -f1)
+    retrieved_pos=$(echo "$output" | grep -n "## Retrieved Project Memory" | head -1 | cut -d: -f1)
+    knowledge_pos=$(echo "$output" | grep -n "## Accumulated Knowledge" | head -1 | cut -d: -f1)
     skills_pos=$(echo "$output" | grep -n "## Skills" | head -1 | cut -d: -f1)
     output_pos=$(echo "$output" | grep -n "## Output Instructions" | head -1 | cut -d: -f1)
 
     [[ "$task_pos" -lt "$failure_pos" ]]
-    [[ "$failure_pos" -lt "$knowledge_pos" ]]
-    [[ "$knowledge_pos" -lt "$handoff_pos" ]]
-    [[ "$handoff_pos" -lt "$skills_pos" ]]
+    [[ "$failure_pos" -lt "$retrieved_memory_pos" ]]
+    [[ "$retrieved_memory_pos" -lt "$handoff_pos" ]]
+    [[ "$handoff_pos" -lt "$retrieved_pos" ]]
+    [[ "$retrieved_pos" -lt "$knowledge_pos" ]]
+    [[ "$knowledge_pos" -lt "$skills_pos" ]]
     [[ "$skills_pos" -lt "$output_pos" ]]
 }
