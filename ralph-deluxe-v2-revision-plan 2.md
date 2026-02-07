@@ -657,3 +657,16 @@ Estimated total changes:
 - **Schema change**: 1 field added to handoff-schema.json
 
 The existing codebase is ~90% preserved. The core insight — the handoff narrative — is literally one JSON field and a rewritten prompt footer.
+
+---
+
+## Tracking implementation progress
+
+After completing work on each PR, update `v2-implementation-status.md` at the project root:
+
+1. Change the PR's heading status (e.g., `NOT STARTED` → `IN PROGRESS` → `IMPLEMENTED`)
+2. Mark each line item in the PR's table as `Done` or `Partial` with notes
+3. Update the **Summary** table at the bottom
+4. Update the `Last verified` date at the top of the file
+
+This keeps a single source of truth for what has shipped vs. what remains. The status file lives alongside this plan so reviewers can cross-reference the two.
