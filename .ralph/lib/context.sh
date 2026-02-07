@@ -174,6 +174,100 @@ format_compacted_context() {
     fi
 }
 
+# retrieve_relevant_knowledge — Pull a bounded set of relevant lines from the knowledge index
+# Relevance is based on task id, title/description keywords, and listed libraries.
+# Category priority: Constraints > Architectural Decisions > Unresolved > Gotchas > Patterns
+retrieve_relevant_knowledge() {
+    local task_json="$1"
+    local index_file="${2:-.ralph/knowledge-index.md}"
+    local max_lines="${3:-12}"
+
+    if [[ ! -f "$index_file" ]]; then
+        echo ""
+        return
+    fi
+
+    local task_id task_title task_description terms_csv
+    task_id=$(echo "$task_json" | jq -r '.id // ""')
+    task_title=$(echo "$task_json" | jq -r '.title // ""')
+    task_description=$(echo "$task_json" | jq -r '.description // ""')
+
+    terms_csv=$(echo "$task_json" | jq -r --arg title "$task_title" --arg desc "$task_description" --arg id "$task_id" '
+        [
+            ($id | ascii_downcase),
+            (.libraries // [] | .[]? | ascii_downcase),
+            (($title + " " + $desc)
+                | ascii_downcase
+                | gsub("[^a-z0-9 ]"; " ")
+                | split(" ")
+                | map(select(length >= 4))
+                | .[])
+        ]
+        | map(select(length > 0))
+        | unique
+        | .[0:40]
+        | join(",")
+    ')
+
+    if [[ -z "$terms_csv" ]]; then
+        echo ""
+        return
+    fi
+
+    awk -v terms="$terms_csv" -v limit="$max_lines" '
+        BEGIN {
+            split(terms, raw_terms, ",");
+            for (i in raw_terms) {
+                if (length(raw_terms[i]) > 0) query[raw_terms[i]] = 1;
+            }
+
+            priority["constraints"] = 1;
+            priority["architectural decisions"] = 2;
+            priority["unresolved"] = 3;
+            priority["gotchas"] = 4;
+            priority["patterns"] = 5;
+            current = "";
+            count = 0;
+        }
+        /^##[[:space:]]+/ {
+            heading = tolower($0);
+            sub(/^##[[:space:]]+/, "", heading);
+            gsub(/[[:space:]]+$/, "", heading);
+            current = heading;
+            next;
+        }
+        {
+            if (current == "" || !(current in priority)) next;
+
+            line = $0;
+            if (line ~ /^[[:space:]]*$/) next;
+
+            low = tolower(line);
+            matched = 0;
+            for (term in query) {
+                if (index(low, term) > 0) {
+                    matched = 1;
+                    break;
+                }
+            }
+
+            if (matched) {
+                key = priority[current] ":" NR;
+                rows[key] = line;
+            }
+        }
+        END {
+            for (k in rows) keys[++n] = k;
+            asort(keys);
+
+            for (i = 1; i <= n && count < limit; i++) {
+                print rows[keys[i]];
+                count++;
+            }
+        }
+    ' "$index_file"
+}
+
 # build_coding_prompt_v2 — Mode-aware prompt assembly using handoff-first context
 # In handoff-only mode: previous handoff narrative IS the context (no compacted context)
 # In handoff-plus-index mode: handoff leads, plus a pointer to the knowledge index file
@@ -205,6 +299,16 @@ build_coding_prompt_v2() {
     else
         prompt+="## Context"$'\n'
         prompt+="This is the first iteration. No previous handoff available."$'\n\n'
+    fi
+
+    # === RETRIEVED PROJECT MEMORY (handoff-plus-index mode only) ===
+    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        local retrieved_memory
+        retrieved_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
+        if [[ -n "$retrieved_memory" ]]; then
+            prompt+="## Retrieved Project Memory"$'\n'
+            prompt+="$retrieved_memory"$'\n\n'
+        fi
     fi
 
     # === KNOWLEDGE INDEX POINTER (handoff-plus-index mode only) ===
