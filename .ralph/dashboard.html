@@ -42,6 +42,7 @@ const state = {
   plan: { project: "", tasks: [] },
   handoffs: [],
   knowledgeIndex: [],
+  progressLog: { plan_summary: {}, entries: [] },
   events: [],
   // UI state
   selectedHandoff: 0,
@@ -57,6 +58,10 @@ const formState = {
   controlOpen: true,
   lastCommandStatus: null, // { ok: bool, message: string, ts: number }
 };
+
+// --- ProgressLog UI State (persisted across renders) ---
+const progressExpandState = {};  // keyed by task_id: true = expanded
+let progressActiveTab = "summary"; // "summary" or "detail"
 
 // --- API Helpers ---
 async function postCommand(cmdObj) {
@@ -124,16 +129,18 @@ function parseJSONL(text) {
 async function pollData() {
   try {
     // Fetch all data sources in parallel
-    const [orchState, plan, indexData, eventsText] = await Promise.all([
+    const [orchState, plan, indexData, progressData, eventsText] = await Promise.all([
       fetchJSON(".ralph/state.json"),
       fetchJSON("plan.json"),
       fetchJSON(".ralph/knowledge-index.json"),
+      fetchJSON(".ralph/progress-log.json"),
       fetchText(".ralph/logs/events.jsonl")
     ]);
 
     if (orchState) state.orchestrator = orchState;
     if (plan) state.plan = plan;
     if (indexData) state.knowledgeIndex = Array.isArray(indexData) ? indexData : [];
+    if (progressData) state.progressLog = progressData;
     state.events = parseJSONL(eventsText);
 
     // Discover handoffs based on iteration count or probe sequentially
@@ -615,6 +622,280 @@ function KnowledgeIndex() {
   return panel;
 }
 
+function ProgressLog() {
+  const log = state.progressLog || { plan_summary: {}, entries: [] };
+  const summary = log.plan_summary || {};
+  const entries = log.entries || [];
+
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  // Header with tab toggle
+  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Progress Log"));
+
+  const tabBar = h("div", { className: "flex rounded-lg overflow-hidden border border-zinc-800" });
+  for (const tab of ["summary", "detail"]) {
+    tabBar.appendChild(h("button", {
+      className: `px-3 py-1 text-xs uppercase tracking-wider transition-colors ${
+        progressActiveTab === tab ? "bg-zinc-800 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
+      }`,
+      onClick: () => { progressActiveTab = tab; render(); }
+    }, tab));
+  }
+  header.appendChild(tabBar);
+  panel.appendChild(header);
+
+  // Empty state
+  if (entries.length === 0) {
+    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+      "No progress entries yet. They appear after the first successful iteration."
+    ));
+    return panel;
+  }
+
+  if (progressActiveTab === "summary") {
+    panel.appendChild(ProgressSummaryView(summary, entries));
+  } else {
+    panel.appendChild(ProgressDetailView(entries));
+  }
+
+  return panel;
+}
+
+function ProgressSummaryView(summary, entries) {
+  const container = h("div", { className: "p-4 space-y-4" });
+
+  // Compact status bar from plan_summary
+  const total = summary.total_tasks || 0;
+  const completed = summary.completed || 0;
+  const failed = summary.failed || 0;
+  const pending = summary.pending || 0;
+  const skipped = summary.skipped || 0;
+
+  const statusBar = h("div", { className: "flex items-center gap-3 flex-wrap" });
+  if (total > 0) {
+    statusBar.appendChild(h("span", { className: "text-sm font-mono text-emerald-400 font-bold" },
+      `${completed}/${total} tasks done`
+    ));
+    if (failed > 0) {
+      statusBar.appendChild(h("span", { className: "text-xs text-red-400 font-mono" }, `${failed} failed`));
+    }
+    if (skipped > 0) {
+      statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${skipped} skipped`));
+    }
+    if (pending > 0) {
+      statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${pending} pending`));
+    }
+  }
+  container.appendChild(statusBar);
+
+  // Progress bar
+  if (total > 0) {
+    const pctDone = Math.round((completed / total) * 100);
+    const barOuter = h("div", { className: "w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden" });
+    barOuter.appendChild(h("div", {
+      className: "h-full bg-emerald-500 rounded-full transition-all",
+      style: { width: pctDone + "%" }
+    }));
+    container.appendChild(barOuter);
+  }
+
+  // Task table with summary text from entries
+  const tableWrap = h("div", { className: "overflow-x-auto" });
+  const table = h("table", { className: "w-full text-xs" });
+
+  const thead = h("thead", {});
+  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800" });
+  for (const col of ["Task", "Status", "Summary"]) {
+    headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium" }, col));
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = h("tbody", { className: "divide-y divide-zinc-800/50" });
+
+  // Build a map from task_id to latest entry summary
+  const entryMap = {};
+  for (const entry of entries) {
+    entryMap[entry.task_id] = entry;
+  }
+
+  // Use plan tasks if available, otherwise fall back to entries
+  const tasks = (state.plan.tasks || []);
+  if (tasks.length > 0) {
+    for (const task of tasks) {
+      const entry = entryMap[task.id];
+      const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, task.id));
+      row.appendChild(h("td", { className: "px-3 py-1.5" }, StatusBadge(task.status)));
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry ? entry.summary : "\u2014"));
+      tbody.appendChild(row);
+    }
+  } else {
+    for (const entry of entries) {
+      const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, entry.task_id));
+      row.appendChild(h("td", { className: "px-3 py-1.5" }, StatusBadge(entry.fully_complete ? "done" : "in_progress")));
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry.summary || "\u2014"));
+      tbody.appendChild(row);
+    }
+  }
+
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  container.appendChild(tableWrap);
+  return container;
+}
+
+function ProgressDetailView(entries) {
+  const container = h("div", { className: "divide-y divide-zinc-800/50" });
+
+  for (const entry of entries) {
+    const taskId = entry.task_id || "";
+    const isExpanded = progressExpandState[taskId] || false;
+    const isComplete = entry.fully_complete;
+    const hasBugs = (entry.bugs || []).some(b => !b.resolved);
+
+    // Color-coded left border
+    let borderColor = "border-emerald-500";
+    if (hasBugs) borderColor = "border-red-500";
+    else if (!isComplete) borderColor = "border-amber-500";
+
+    const entryEl = h("div", { className: `border-l-2 ${borderColor}` });
+
+    // Clickable header row
+    const headerRow = h("div", {
+      className: "px-4 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-zinc-800/30 transition-colors",
+      onClick: () => { progressExpandState[taskId] = !isExpanded; render(); }
+    });
+
+    headerRow.appendChild(h("span", { className: "text-xs text-zinc-500" }, isExpanded ? "\u25BC" : "\u25B6"));
+    headerRow.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono w-16 flex-shrink-0" }, taskId));
+    headerRow.appendChild(h("span", { className: "text-sm text-zinc-300 flex-1" }, entry.title || entry.summary || ""));
+    headerRow.appendChild(StatusBadge(isComplete ? "done" : "in_progress"));
+    if (entry.iteration) {
+      headerRow.appendChild(h("span", { className: "text-xs text-zinc-600 font-mono" }, `iter ${entry.iteration}`));
+    }
+
+    entryEl.appendChild(headerRow);
+
+    // Expanded detail content
+    if (isExpanded) {
+      const detail = h("div", { className: "px-4 pb-4 space-y-3 ml-4" });
+
+      // Summary
+      if (entry.summary) {
+        detail.appendChild(h("div", {},
+          h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Summary"),
+          h("div", { className: "text-sm text-zinc-300" }, entry.summary)
+        ));
+      }
+
+      // Files changed table
+      const files = entry.files_changed || [];
+      if (files.length > 0) {
+        const filesSection = h("div", {});
+        filesSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" },
+          `Files Changed (${files.length})`
+        ));
+        const ftable = h("table", { className: "w-full text-xs" });
+        const ftbody = h("tbody", { className: "divide-y divide-zinc-800/30" });
+        for (const f of files) {
+          const actionColor = f.action === "created" ? "text-emerald-500" :
+                              f.action === "deleted" ? "text-red-500" : "text-blue-400";
+          const frow = h("tr", {});
+          frow.appendChild(h("td", { className: "py-0.5 pr-3 text-zinc-500 font-mono" }, f.path));
+          frow.appendChild(h("td", { className: `py-0.5 ${actionColor}` }, f.action));
+          ftbody.appendChild(frow);
+        }
+        ftable.appendChild(ftbody);
+        filesSection.appendChild(ftable);
+        detail.appendChild(filesSection);
+      }
+
+      // Tests added
+      const tests = entry.tests_added || [];
+      if (tests.length > 0) {
+        const testsSection = h("div", {});
+        testsSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Tests Added"));
+        for (const t of tests) {
+          const testNames = (t.test_names || []).join(", ");
+          testsSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+            h("span", { className: "text-zinc-500 font-mono" }, t.file),
+            testNames ? h("span", { className: "text-zinc-600" }, ": " + testNames) : null
+          ));
+        }
+        detail.appendChild(testsSection);
+      }
+
+      // Design decisions
+      const decisions = entry.design_decisions || [];
+      if (decisions.length > 0) {
+        const decSection = h("div", {});
+        decSection.appendChild(h("div", { className: "text-xs text-emerald-500 uppercase tracking-wider mb-1" }, "Design Decisions"));
+        for (const d of decisions) {
+          decSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" }, "\u2022 " + d));
+        }
+        detail.appendChild(decSection);
+      }
+
+      // Constraints
+      const constraints = entry.constraints || [];
+      if (constraints.length > 0) {
+        const conSection = h("div", {});
+        conSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Constraints"));
+        for (const c of constraints) {
+          conSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+            h("span", { className: "text-zinc-300" }, c.constraint),
+            h("span", { className: "text-zinc-600" }, " \u2014 "),
+            h("span", { className: "text-zinc-500" }, c.impact)
+          ));
+        }
+        detail.appendChild(conSection);
+      }
+
+      // Deviations
+      const deviations = entry.deviations || [];
+      if (deviations.length > 0) {
+        const devSection = h("div", {});
+        devSection.appendChild(h("div", { className: "text-xs text-amber-500 uppercase tracking-wider mb-1" }, "Deviations"));
+        for (const d of deviations) {
+          devSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+            h("span", { className: "text-zinc-500" }, d.planned),
+            h("span", { className: "text-zinc-600" }, " \u2192 "),
+            h("span", { className: "text-zinc-300" }, d.actual),
+            h("span", { className: "text-zinc-600" }, " \u2014 "),
+            h("span", { className: "text-zinc-500 italic" }, d.reason)
+          ));
+        }
+        detail.appendChild(devSection);
+      }
+
+      // Bugs
+      const bugs = entry.bugs || [];
+      if (bugs.length > 0) {
+        const bugSection = h("div", {});
+        bugSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Bugs"));
+        for (const b of bugs) {
+          const resolved = b.resolved;
+          bugSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+            h("span", { className: resolved ? "text-emerald-500" : "text-red-400" }, resolved ? "\u2713 " : "\u2717 "),
+            h("span", { className: "text-zinc-300" }, b.description),
+            b.resolution ? h("span", { className: "text-zinc-600" }, " \u2014 " + b.resolution) : null
+          ));
+        }
+        detail.appendChild(bugSection);
+      }
+
+      entryEl.appendChild(detail);
+    }
+
+    container.appendChild(entryEl);
+  }
+
+  return container;
+}
+
 function GitTimeline() {
   const handoffs = state.handoffs;
   const events = state.events;
@@ -1011,9 +1292,10 @@ function render() {
     leftCol.appendChild(SettingsPanel());
     grid.appendChild(leftCol);
 
-    // Right column: HandoffViewer + KnowledgeIndex
+    // Right column: HandoffViewer + ProgressLog + KnowledgeIndex
     const rightCol = h("div", { className: "lg:col-span-2 space-y-4" });
     rightCol.appendChild(HandoffViewer());
+    rightCol.appendChild(ProgressLog());
     rightCol.appendChild(KnowledgeIndex());
     grid.appendChild(rightCol);
 
