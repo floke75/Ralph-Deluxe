@@ -453,6 +453,9 @@ main() {
     if declare -f init_control_file >/dev/null 2>&1; then
         init_control_file
     fi
+    if declare -f init_progress_log >/dev/null 2>&1; then
+        init_progress_log
+    fi
     if declare -f emit_event >/dev/null 2>&1; then
         emit_event "orchestrator_start" "Ralph Deluxe starting" \
             "$(jq -cn --arg mode "$MODE" --argjson dry_run "$DRY_RUN" --argjson resume "$RESUME" \
@@ -530,6 +533,11 @@ main() {
             local handoff_file
             handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")" || true
             set_task_status "$PLAN_FILE" "$task_id" "done"
+            if declare -f append_progress_entry >/dev/null 2>&1; then
+                append_progress_entry "$handoff_file" "$current_iteration" "$task_id" || {
+                    log "warn" "Progress log update failed, continuing"
+                }
+            fi
             continue
         fi
 
@@ -589,6 +597,13 @@ main() {
             # Step 6a: Commit successful iteration
             commit_iteration "$current_iteration" "$task_id" "passed validation"
             set_task_status "$PLAN_FILE" "$task_id" "done"
+
+            # Step 6b: Append progress log entry
+            if declare -f append_progress_entry >/dev/null 2>&1; then
+                append_progress_entry "$handoff_file" "$current_iteration" "$task_id" || {
+                    log "warn" "Progress log update failed, continuing"
+                }
+            fi
 
             # Step 7: Apply plan amendments from handoff (if any)
             if [[ -n "$handoff_file" && -f "$handoff_file" ]]; then
