@@ -20,6 +20,7 @@ DRY_RUN=false
 RESUME=false
 LOG_LEVEL="${RALPH_LOG_LEVEL:-info}"
 LOG_FILE="${RALPH_LOG_FILE:-.ralph/logs/ralph.log}"
+MODE=""  # handoff-only | handoff-plus-index (set by CLI, config, or default)
 
 ###############################################################################
 # Logging
@@ -70,6 +71,7 @@ Options:
   --max-iterations N   Maximum iterations to run (default: $MAX_ITERATIONS)
   --plan FILE          Path to plan.json (default: $PLAN_FILE)
   --config FILE        Path to ralph.conf (default: $CONFIG_FILE)
+  --mode MODE          Operating mode: handoff-only (default) or handoff-plus-index
   --dry-run            Print what would happen without executing
   --resume             Resume from saved state
   -h, --help           Show this help message
@@ -89,6 +91,10 @@ parse_args() {
                 ;;
             --config)
                 CONFIG_FILE="$2"
+                shift 2
+                ;;
+            --mode)
+                MODE="$2"
                 shift 2
                 ;;
             --dry-run)
@@ -311,8 +317,12 @@ run_coding_cycle() {
         compacted_context="${first_iter_content}"$'\n\n'"${compacted_context}"
     fi
 
-    # Build prompt with priority-ordered context
-    prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content" "$failure_context" "$earlier_l1")"
+    # Build prompt — use mode-aware v2 if available, else fall back to v1
+    if declare -f build_coding_prompt_v2 >/dev/null 2>&1; then
+        prompt="$(build_coding_prompt_v2 "$task_json" "$MODE" "$skills_content" "$failure_context")"
+    else
+        prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content" "$failure_context" "$earlier_l1")"
+    fi
 
     # Apply token budget truncation
     prompt="$(truncate_to_budget "$prompt")"
@@ -398,11 +408,20 @@ trap shutdown_handler SIGINT SIGTERM
 ###############################################################################
 main() {
     parse_args "$@"
+    local cli_mode="$MODE"
     load_config
+    # Priority: CLI --mode > RALPH_MODE from config > default
+    if [[ -n "$cli_mode" ]]; then
+        MODE="$cli_mode"
+    elif [[ -n "${RALPH_MODE:-}" ]]; then
+        MODE="$RALPH_MODE"
+    else
+        MODE="handoff-only"
+    fi
 
     cd "$PROJECT_ROOT"
 
-    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME)"
+    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME, mode=$MODE)"
 
     local remaining
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"
@@ -420,6 +439,9 @@ main() {
         write_state "status" "running"
         write_state "started_at" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     fi
+
+    # Always persist current mode to state
+    write_state "mode" "$MODE"
 
     # Source library modules (after config, before loop)
     source_libs
@@ -468,12 +490,14 @@ main() {
 
         # === DRY RUN MODE ===
         if [[ "$DRY_RUN" == "true" ]]; then
-            log "info" "[DRY RUN] Processing task $task_id"
+            log "info" "[DRY RUN] Processing task $task_id (mode=$MODE)"
 
-            # Still run compaction check in dry-run to test triggers
-            if check_compaction_trigger "$STATE_FILE" "$task_json" 2>/dev/null; then
-                log "info" "[DRY RUN] Compaction would be triggered"
-                run_compaction_cycle "$task_json" || true
+            # Still run compaction check in dry-run to test triggers (handoff-plus-index only)
+            if [[ "$MODE" == "handoff-plus-index" ]]; then
+                if check_compaction_trigger "$STATE_FILE" "$task_json" 2>/dev/null; then
+                    log "info" "[DRY RUN] Compaction would be triggered"
+                    run_compaction_cycle "$task_json" || true
+                fi
             fi
 
             # Run coding cycle in dry-run (CLI returns mock response)
@@ -486,12 +510,14 @@ main() {
 
         # === REAL MODE ===
 
-        # Step 1: Check compaction trigger
-        if check_compaction_trigger "$STATE_FILE" "$task_json"; then
-            log "info" "Compaction triggered, running memory iteration"
-            run_compaction_cycle "$task_json" || {
-                log "warn" "Compaction failed, continuing without updated context"
-            }
+        # Step 1: Check if knowledge indexing is due (handoff-plus-index mode only)
+        if [[ "$MODE" == "handoff-plus-index" ]]; then
+            if check_compaction_trigger "$STATE_FILE" "$task_json"; then
+                log "info" "Compaction triggered, running memory iteration"
+                run_compaction_cycle "$task_json" || {
+                    log "warn" "Compaction failed, continuing without updated context"
+                }
+            fi
         fi
 
         # Step 2: Mark task as in-progress
