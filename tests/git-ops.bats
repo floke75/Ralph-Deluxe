@@ -16,6 +16,8 @@ setup() {
     git init --quiet
     git config user.email "test@test.com"
     git config user.name "Test"
+    git config commit.gpgsign false
+    git config tag.gpgsign false
 
     # Create an initial commit so HEAD exists
     echo "initial" > file.txt

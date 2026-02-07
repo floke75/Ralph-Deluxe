@@ -79,11 +79,13 @@ EOF
 }
 EOF
 
-    # Initialize git repo
+    # Initialize git repo (disable signing for test isolation)
     cd "$TEST_DIR"
     git init --quiet
     git config user.email "test@test.com"
     git config user.name "Test"
+    git config commit.gpgsign false
+    git config tag.gpgsign false
     git add -A
     git commit --quiet -m "initial commit"
 }
@@ -196,19 +198,18 @@ RALPH_MIN_DELAY_SECONDS=0
 CONF
     git add -A && git commit --quiet -m "setup failing validation"
 
-    local head_before
-    head_before="$(git rev-parse HEAD)"
-
     PATH="$TEST_DIR/bin:$PATH" run bash "$TEST_DIR/.ralph/ralph.sh" --plan "$TEST_DIR/plan.json" --max-iterations 1
     # May succeed (handled the failure) or return 1
 
-    # HEAD should be restored to checkpoint (files from claude should be rolled back)
-    local head_after
-    head_after="$(git rev-parse HEAD)"
-    [[ "$head_before" == "$head_after" ]]
-
-    # The file created by mock claude should not exist
+    # The file created by mock claude should not exist (rolled back)
     [[ ! -f "$TEST_DIR/new-file-from-claude.txt" ]]
+
+    # The last commit should NOT be an iteration commit — rollback undid it.
+    # (The orchestrator may create auto-commits at startup for init files,
+    # but the failed iteration's commit should have been rolled back.)
+    local last_msg
+    last_msg="$(git log -1 --format=%s)"
+    [[ "$last_msg" != *"TASK-001 — passed validation"* ]]
 }
 
 # --- State file preserved on error ---
