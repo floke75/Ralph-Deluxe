@@ -16,6 +16,7 @@ Ralph Deluxe reads a `plan.json` containing ordered tasks, executes them one at 
 - **MCP isolation** -- Coding iterations use built-in tools only; memory iterations get Context7 and Knowledge Graph Memory Server
 - **Telemetry and event logging** -- Append-only JSONL event stream for monitoring iteration lifecycle
 - **Operator dashboard** -- Single-file HTML dashboard with real-time metrics, handoff viewer, control plane (pause/resume, inject notes, skip tasks), and settings
+- **Auto-generated progress log (dual .md/.json)** -- Per-task progress entries auto-generated from handoffs after each successful iteration, capturing design decisions, constraints, and deviations
 - **Rate limit protection** -- Configurable delay between iterations and max-turns caps
 
 ## Prerequisites
@@ -114,6 +115,7 @@ The server serves all project files (state, handoffs, events) and provides POST 
 - **Metrics strip** -- Iteration count, tasks completed, validation pass/fail counts, rollbacks, current mode, and orchestrator status
 - **Task plan** -- Full task list with status badges and current-task highlighting. Pending tasks have skip buttons
 - **Handoff viewer** -- Browse all handoff documents. Shows the freeform narrative (primary view), plus structured fields: deviations, constraints, architecture notes, and files touched
+- **Progress log** -- Summary and detail views of auto-generated progress entries. Shows task completion counts, files changed, tests added, design decisions, and constraints per task
 - **Knowledge index** -- Table view of the knowledge index (iteration, task, summary, tags). Active in `handoff-plus-index` mode
 - **Git timeline** -- Visual timeline of iterations with pass/fail/running states
 - **Event log** -- Live stream of the last 50 telemetry events, color-coded by type
@@ -163,7 +165,8 @@ project-root/
 │   │   ├── git-ops.sh               # Git checkpoint/rollback functions
 │   │   ├── plan-ops.sh              # Plan reading/mutation functions
 │   │   ├── compaction.sh            # Compaction + knowledge indexer functions
-│   │   └── telemetry.sh             # Event logging + control command processing
+│   │   ├── telemetry.sh             # Event logging + control command processing
+│   │   └── progress-log.sh          # Progress log auto-generation
 │   ├── config/
 │   │   ├── mcp-coding.json          # MCP config for coding iterations
 │   │   ├── mcp-memory.json          # MCP config for memory/indexer iterations
@@ -193,6 +196,8 @@ project-root/
 │   │   └── validation/              # Per-iteration validation results
 │   ├── knowledge-index.md           # Categorized knowledge index (LLM-readable)
 │   ├── knowledge-index.json         # Iteration-keyed index (dashboard-readable)
+│   ├── progress-log.md              # Auto-generated progress log (human/LLM-readable)
+│   ├── progress-log.json            # Auto-generated progress log (dashboard-readable)
 │   ├── memory.jsonl                 # Knowledge Graph Memory Server data
 │   └── state.json                   # Orchestrator runtime state
 ├── plan.json                        # Task plan (project root)
@@ -262,6 +267,17 @@ The orchestrator emits structured events to `.ralph/logs/events.jsonl`. Each eve
 Event types: `orchestrator_start`, `orchestrator_end`, `iteration_start`, `iteration_end`, `validation_pass`, `validation_fail`, `pause`, `resume`, `note`, `skip_task`.
 
 The dashboard reads this file to render the event log and compute metrics.
+
+### Progress Log
+
+After each successful iteration, the orchestrator auto-generates a progress log entry from the handoff. The progress log is written in dual format:
+
+- `.ralph/progress-log.md` -- Human/LLM-readable markdown with a summary table and per-task entries
+- `.ralph/progress-log.json` -- Machine-readable JSON for the dashboard's ProgressLog panel
+
+Entries are organized per-task (keyed by task ID, not iteration number) and include: summary, files changed, tests added, design decisions, constraints discovered, and deviations from the plan. The markdown file includes a top-level summary table that is regenerated on each append to reflect current plan status.
+
+The progress log follows the same dual-file pattern as the knowledge index and the same guard pattern as telemetry (`declare -f` + non-fatal fallback).
 
 ## Testing
 

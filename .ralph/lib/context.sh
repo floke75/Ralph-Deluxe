@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # context.sh — Context assembly functions for Ralph Deluxe
-# Assembles coding prompts from task JSON, compacted context, handoffs, and skills.
+# Primary function: build_coding_prompt_v2() — handoff-first prompt assembly.
+# Also contains legacy build_coding_prompt() for backward compatibility.
 
 # Source config if not already loaded
 if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS:-}" ]]; then

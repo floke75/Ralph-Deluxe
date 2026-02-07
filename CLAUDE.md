@@ -5,7 +5,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 
 ## Directory Structure
 - `.ralph/ralph.sh` — Main orchestrator script
-- `.ralph/lib/` — Helper modules (cli-ops.sh, context.sh, validation.sh, git-ops.sh, plan-ops.sh, compaction.sh, telemetry.sh)
+- `.ralph/lib/` — Helper modules (cli-ops.sh, context.sh, validation.sh, git-ops.sh, plan-ops.sh, compaction.sh, telemetry.sh, progress-log.sh)
 - `.ralph/config/` — JSON configs and schemas (ralph.conf, handoff-schema.json, mcp-*.json)
 - `.ralph/templates/` — Prompt templates (coding-prompt.md, memory-prompt.md, knowledge-index-prompt.md, first-iteration.md)
 - `.ralph/skills/` — Per-task skill injection files (markdown)
@@ -17,6 +17,9 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 - `.ralph/serve.py` — HTTP server for dashboard (static files + control plane POST endpoints)
 - `.ralph/knowledge-index.md` — Categorized knowledge index (handoff-plus-index mode)
 - `.ralph/knowledge-index.json` — Iteration-keyed index for dashboard (handoff-plus-index mode)
+- `.ralph/progress-log.md` — Auto-generated progress log (human/LLM-readable)
+- `.ralph/progress-log.json` — Auto-generated progress log (dashboard-readable)
+- `.ralph/state.json` — Orchestrator runtime state (current iteration, mode, compaction counters)
 - `plan.json` — Task plan (project root for visibility)
 - `tests/` — bats-core test suite
 
@@ -29,7 +32,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 ## Handoff Schema
 - `summary` (string, required) — One-line description of what was accomplished
 - `freeform` (string, required) — Full narrative briefing for the next iteration (the most important field)
-- Plus structured fields: task_completed, deviations, bugs_encountered, architectural_notes, constraints_discovered, files_touched, plan_amendments, tests_added
+- Plus structured fields: task_completed, deviations, bugs_encountered, architectural_notes, constraints_discovered, files_touched, plan_amendments, tests_added, unfinished_business, recommendations
 
 ## Telemetry
 - Events logged to `.ralph/logs/events.jsonl` as JSONL (`{timestamp, event, message, metadata}`)
@@ -40,7 +43,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 ## Dashboard
 - Single-file HTML at `.ralph/dashboard.html` (vanilla JS + Tailwind CDN)
 - Serve via `python3 .ralph/serve.py --port 8080` from project root
-- Polls state.json, plan.json, handoffs, events.jsonl, knowledge-index.json every 3 seconds
+- Polls state.json, plan.json, handoffs, events.jsonl, knowledge-index.json, progress-log.json every 3 seconds
 - Control plane: pause/resume, inject notes, skip tasks, settings — all POST to serve.py
 
 ## Bash Conventions
@@ -61,7 +64,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 
 ## Testing
 - Test framework: bats-core
-- Test files: `tests/<module>.bats` (context.bats, compaction.bats, telemetry.bats, integration.bats, etc.)
+- Test files: `tests/<module>.bats` (context.bats, compaction.bats, telemetry.bats, progress-log.bats, integration.bats, etc.)
 - Each module has its own test file
 - Use `setup()` and `teardown()` for test fixtures
 - Test in temporary directories to avoid polluting the project
