@@ -66,23 +66,103 @@ teardown() {
     [[ "$output" == "$short_text" ]]
 }
 
-@test "truncate_to_budget truncates when over budget" {
+@test "truncate_to_budget truncates unstructured content with metadata" {
     # Budget of 5 tokens = 20 chars max
     local long_text="This is a much longer text that will exceed the budget we set"
     run truncate_to_budget "$long_text" 5
     [[ "$status" -eq 0 ]]
-    # Output should start with the first 20 chars
     [[ "$output" == *"This is a much longe"* ]]
-    # Output should contain truncation notice
-    [[ "$output" == *"CONTEXT TRUNCATED"* ]]
+    [[ "$output" == *"[[TRUNCATION_METADATA]]"* ]]
+    [[ "$output" == *'"truncated_sections":["unstructured"]'* ]]
 }
 
-@test "truncate_to_budget includes char counts in notice" {
-    local long_text
-    long_text=$(printf '%0.s.' {1..100})
-    run truncate_to_budget "$long_text" 10
+@test "truncate_to_budget preserves high-priority task headers in sectioned prompt" {
+    local sectioned
+    sectioned=$(cat <<'EOF'
+## Current Task
+ID: TASK-123
+Title: Preserve header
+
+Description:
+Very important details.
+
+Acceptance Criteria:
+- Keep header
+
+## Failure Context
+Validation failures happened in parser.
+
+## Retrieved Memory
+### Constraints
+- Constraint A
+
+### Decisions
+- Decision A
+
+## Previous Handoff
+Narrative narrative narrative narrative narrative narrative narrative narrative narrative narrative narrative narrative narrative.
+
+## Skills
+Skill details repeated. Skill details repeated. Skill details repeated. Skill details repeated.
+
+## Output Instructions
+Output details repeated. Output details repeated. Output details repeated. Output details repeated.
+EOF
+)
+
+    run truncate_to_budget "$sectioned" 35
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"100 chars exceeded 40 char budget"* ]]
+    [[ "$output" == *"## Current Task"* ]]
+    [[ "$output" == *"ID: TASK-123"* ]]
+    [[ "$output" == *"Acceptance Criteria:"* ]]
+}
+
+@test "truncate_to_budget trims low-priority sections first and emits metadata" {
+    local sectioned
+    sectioned=$(cat <<'EOF'
+## Current Task
+ID: TASK-777
+Title: Budget priority behavior
+
+Description:
+Critical description.
+
+Acceptance Criteria:
+- Keep me
+
+## Failure Context
+Important failure context should survive.
+
+## Retrieved Memory
+### Constraints
+- Constraint one
+
+### Decisions
+- Decision one
+
+## Previous Handoff
+NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE NARRATIVE.
+
+## Skills
+SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL.
+
+## Output Instructions
+OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT.
+EOF
+)
+
+    run truncate_to_budget "$sectioned" 55
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"[[TRUNCATION_METADATA]]"* ]]
+    [[ "$output" == *'"truncated_sections"'* ]]
+    # Low-priority sections should be listed before higher-priority memory/failure sections.
+    local skills_pos output_pos handoff_pos
+    skills_pos=$(echo "$output" | grep -n '"Skills"' | head -1 | cut -d: -f1)
+    output_pos=$(echo "$output" | grep -n '"Output Instructions"' | head -1 | cut -d: -f1)
+    handoff_pos=$(echo "$output" | grep -n '"Previous Handoff"' | head -1 | cut -d: -f1)
+    [[ -n "$skills_pos" ]]
+    [[ -n "$output_pos" ]]
+    [[ -z "$handoff_pos" || "$skills_pos" -le "$handoff_pos" ]]
 }
 
 # --- load_skills ---
@@ -247,7 +327,7 @@ teardown() {
     # Check all major sections present
     [[ "$output" == *"## Current Task"* ]]
     [[ "$output" == *"## Output Requirements"* ]]
-    [[ "$output" == *"## Skills & Conventions"* ]]
+    [[ "$output" == *"## Skills"* ]]
     [[ "$output" == *"## Project Context (Compacted)"* ]]
     [[ "$output" == *"## Previous Iteration Summary"* ]]
 }
@@ -309,9 +389,9 @@ teardown() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"## Current Task"* ]]
     [[ "$output" == *"TASK-005"* ]]
-    [[ "$output" == *"## Handoff from Previous Iteration"* ]]
+    [[ "$output" == *"## Previous Handoff"* ]]
     [[ "$output" == *"git operations module"* ]]
-    [[ "$output" == *"## When You're Done"* ]]
+    [[ "$output" == *"## Output Instructions"* ]]
 }
 
 @test "build_coding_prompt_v2 shows first-iteration message when no handoffs exist" {
@@ -327,7 +407,7 @@ teardown() {
 
     run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"## Context"* ]]
+    [[ "$output" == *"## Previous Handoff"* ]]
     [[ "$output" == *"first iteration"* ]]
 }
 
@@ -342,7 +422,7 @@ teardown() {
 
     run build_coding_prompt_v2 "$task_json" "handoff-only" "" "Tests failed: 3 errors in validation.sh"
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"## Previous Attempt Failed"* ]]
+    [[ "$output" == *"## Failure Context"* ]]
     [[ "$output" == *"Tests failed: 3 errors"* ]]
 }
 
@@ -357,7 +437,7 @@ teardown() {
 
     run build_coding_prompt_v2 "$task_json" "handoff-only" "# Use set -euo pipefail" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"## Skills & Conventions"* ]]
+    [[ "$output" == *"## Skills"* ]]
     [[ "$output" == *"set -euo pipefail"* ]]
 }
 
@@ -374,7 +454,7 @@ teardown() {
 
     run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" != *"## Accumulated Knowledge"* ]]
+    [[ "$output" == *"## Retrieved Memory"* ]]
     [[ "$output" != *"knowledge-index.md"* ]]
 }
 
@@ -391,7 +471,7 @@ teardown() {
 
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"## Accumulated Knowledge"* ]]
+    [[ "$output" == *"## Retrieved Memory"* ]]
     [[ "$output" == *"knowledge-index.md"* ]]
 }
 
@@ -407,7 +487,8 @@ teardown() {
     # No knowledge-index.md file
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" != *"## Accumulated Knowledge"* ]]
+    [[ "$output" == *"## Retrieved Memory"* ]]
+    [[ "$output" != *"knowledge-index.md"* ]]
 }
 
 @test "build_coding_prompt_v2 uses get_prev_handoff_for_mode for context" {
@@ -419,11 +500,11 @@ teardown() {
     cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
     cd "$TEST_DIR"
 
-    # In handoff-plus-index mode, should include structured context
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"Structured context from previous iteration"* ]]
-    [[ "$output" == *"TASK-003"* ]]
+    [[ "$output" == *"### Constraints"* ]]
+    [[ "$output" == *"git clean -fd removes files matching .gitignore patterns"* ]]
+    [[ "$output" == *"### Decisions"* ]]
 }
 
 @test "build_coding_prompt_v2 priority order: task > failure > handoff > knowledge > skills > output" {
@@ -441,15 +522,15 @@ teardown() {
 
     local task_pos failure_pos handoff_pos knowledge_pos skills_pos output_pos
     task_pos=$(echo "$output" | grep -n "## Current Task" | head -1 | cut -d: -f1)
-    failure_pos=$(echo "$output" | grep -n "## Previous Attempt Failed" | head -1 | cut -d: -f1)
-    handoff_pos=$(echo "$output" | grep -n "## Handoff from Previous Iteration" | head -1 | cut -d: -f1)
-    knowledge_pos=$(echo "$output" | grep -n "## Accumulated Knowledge" | head -1 | cut -d: -f1)
+    failure_pos=$(echo "$output" | grep -n "## Failure Context" | head -1 | cut -d: -f1)
+    handoff_pos=$(echo "$output" | grep -n "## Previous Handoff" | head -1 | cut -d: -f1)
+    knowledge_pos=$(echo "$output" | grep -n "## Retrieved Memory" | head -1 | cut -d: -f1)
     skills_pos=$(echo "$output" | grep -n "## Skills" | head -1 | cut -d: -f1)
-    output_pos=$(echo "$output" | grep -n "## When You're Done" | head -1 | cut -d: -f1)
+    output_pos=$(echo "$output" | grep -n "## Output Instructions" | head -1 | cut -d: -f1)
 
     [[ "$task_pos" -lt "$failure_pos" ]]
-    [[ "$failure_pos" -lt "$handoff_pos" ]]
-    [[ "$handoff_pos" -lt "$knowledge_pos" ]]
-    [[ "$knowledge_pos" -lt "$skills_pos" ]]
+    [[ "$failure_pos" -lt "$knowledge_pos" ]]
+    [[ "$knowledge_pos" -lt "$handoff_pos" ]]
+    [[ "$handoff_pos" -lt "$skills_pos" ]]
     [[ "$skills_pos" -lt "$output_pos" ]]
 }
