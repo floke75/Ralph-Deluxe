@@ -1,0 +1,12 @@
+[
+  {
+    "iteration": 12,
+    "task": "TASK-012",
+    "summary": "Refers to missing superseded ID",
+    "tags": ["indexing"],
+    "memory_ids": ["K-pattern-two"],
+    "source_iterations": [12],
+    "status": "active",
+    "supersedes": ["K-pattern-missing"]
+  }
+]

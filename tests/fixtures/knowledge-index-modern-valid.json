@@ -1,0 +1,30 @@
+[
+  {
+    "iteration": 7,
+    "task": "TASK-007",
+    "summary": "Introduced stable IDs for constraints",
+    "tags": ["constraints", "indexing"],
+    "memory_ids": ["K-constraint-shell-timeouts", "K-pattern-jq-safe-defaults"],
+    "source_iterations": [6, 7],
+    "status": "active"
+  },
+  {
+    "iteration": 8,
+    "task": "TASK-008",
+    "summary": "Updated timeout guidance",
+    "tags": ["constraints"],
+    "memory_ids": ["K-constraint-shell-timeouts-v2"],
+    "source_iterations": [8],
+    "status": "active",
+    "supersedes": ["K-constraint-shell-timeouts"]
+  },
+  {
+    "iteration": 9,
+    "task": "TASK-009",
+    "summary": "Old timeout guidance retired",
+    "tags": ["constraints"],
+    "memory_ids": ["K-constraint-shell-timeouts"],
+    "source_iterations": [7, 8],
+    "status": "superseded"
+  }
+]
