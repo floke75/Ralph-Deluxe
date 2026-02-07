@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""
+serve.py — Tiny HTTP server for Ralph Deluxe dashboard writes.
+
+Serves static files from the project root and provides a POST endpoint
+for the dashboard to enqueue control commands to commands.json.
+
+Usage:
+    cd <project-root>
+    python3 .ralph/serve.py [--port 8080]
+
+Endpoints:
+    GET  /*                 — Static file serving from project root
+    POST /api/command       — Enqueue a command to commands.json pending array
+    POST /api/settings      — Update ralph.conf settings
+
+The write endpoints use a write-to-temp-then-rename pattern to avoid
+race conditions with the orchestrator reading the same files.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import tempfile
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+
+
+# Resolve project root: serve.py lives at .ralph/serve.py, so root is parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+CONTROL_FILE = SCRIPT_DIR / "control" / "commands.json"
+CONFIG_FILE = SCRIPT_DIR / "config" / "ralph.conf"
+
+
+def atomic_write(filepath: Path, data: str) -> None:
+    """Write data to a file using write-to-temp-then-rename for atomicity."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+        os.replace(tmp_path, filepath)
+    except Exception:
+        os.unlink(tmp_path)
+        raise
+
+
+def enqueue_command(command_obj: dict) -> dict:
+    """Append a command to the pending array in commands.json."""
+    CONTROL_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read current state
+    if CONTROL_FILE.exists():
+        with open(CONTROL_FILE, "r") as f:
+            control = json.load(f)
+    else:
+        control = {"pending": []}
+
+    if "pending" not in control:
+        control["pending"] = []
+
+    control["pending"].append(command_obj)
+
+    atomic_write(CONTROL_FILE, json.dumps(control, indent=2) + "\n")
+    return control
+
+
+def update_settings(settings: dict) -> dict:
+    """Update specific settings in ralph.conf."""
+    if not CONFIG_FILE.exists():
+        return {"error": "ralph.conf not found"}
+
+    with open(CONFIG_FILE, "r") as f:
+        content = f.read()
+
+    # Only allow updating known safe settings
+    ALLOWED_SETTINGS = {
+        "RALPH_VALIDATION_STRATEGY",
+        "RALPH_COMPACTION_INTERVAL",
+        "RALPH_COMPACTION_THRESHOLD_BYTES",
+        "RALPH_DEFAULT_MAX_TURNS",
+        "RALPH_MIN_DELAY_SECONDS",
+        "RALPH_MODE",
+    }
+
+    updated = []
+    for key, value in settings.items():
+        if key not in ALLOWED_SETTINGS:
+            continue
+        # Sanitize value: only allow alphanumeric, hyphens, underscores, digits
+        safe_value = str(value)
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', safe_value):
+            continue
+        # Replace existing line or skip if not found
+        pattern = re.compile(rf'^({re.escape(key)}=).*$', re.MULTILINE)
+        if pattern.search(content):
+            content = pattern.sub(rf'\g<1>"{safe_value}"', content)
+            updated.append(key)
+
+    if updated:
+        atomic_write(CONFIG_FILE, content)
+
+    return {"updated": updated}
+
+
+class RalphHandler(SimpleHTTPRequestHandler):
+    """HTTP handler: static files + API endpoints."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(PROJECT_ROOT), **kwargs)
+
+    def do_POST(self):
+        if self.path == "/api/command":
+            self._handle_command()
+        elif self.path == "/api/settings":
+            self._handle_settings()
+        else:
+            self.send_error(404, "Not Found")
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        raw = self.rfile.read(length)
+        return json.loads(raw)
+
+    def _send_json(self, status: int, data: dict):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def _handle_command(self):
+        try:
+            body = self._read_body()
+            if "command" not in body:
+                self._send_json(400, {"error": "Missing 'command' field"})
+                return
+            result = enqueue_command(body)
+            self._send_json(200, {"ok": True, "pending_count": len(result["pending"])})
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "Invalid JSON"})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_settings(self):
+        try:
+            body = self._read_body()
+            if not body:
+                self._send_json(400, {"error": "Empty body"})
+                return
+            result = update_settings(body)
+            self._send_json(200, {"ok": True, **result})
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "Invalid JSON"})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def log_message(self, format, *args):
+        """Quieter logging — only show API calls, not static file requests."""
+        if self.path.startswith("/api/"):
+            sys.stderr.write(f"[ralph-serve] {self.address_string()} {format % args}\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Ralph Deluxe dashboard server")
+    parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
+    parser.add_argument("--bind", default="127.0.0.1", help="Address to bind to")
+    args = parser.parse_args()
+
+    os.chdir(PROJECT_ROOT)
+
+    server = HTTPServer((args.bind, args.port), RalphHandler)
+    print(f"Ralph Deluxe server running at http://{args.bind}:{args.port}/")
+    print(f"Dashboard: http://{args.bind}:{args.port}/.ralph/dashboard.html")
+    print(f"Project root: {PROJECT_ROOT}")
+    print("Press Ctrl+C to stop.")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,6 @@
 # Ralph-Deluxe v2 — Implementation Status
 
-**Last verified:** 2026-02-07
+**Last verified:** 2026-02-07 (PR 6)
 **Verified against:** `ralph-deluxe-v2-revision-plan 2.md`
 
 ---
@@ -95,17 +95,20 @@
 
 ---
 
-## PR 6: Control Plane — NOT STARTED
+## PR 6: Control Plane — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| Pause/resume toggle in dashboard | Writes `commands.json` | Not done |
-| Inject note textarea in dashboard | Writes `commands.json` | Not done |
-| Skip task buttons in dashboard | Writes `commands.json` | Not done |
-| Settings panel in dashboard | Writes `commands.json` | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| Pause/resume toggle in dashboard | Writes `commands.json` | Done | ControlPlane component, POSTs to `/api/command` via serve.py |
+| Inject note textarea in dashboard | Writes `commands.json` | Done | Textarea with persistent form state across render cycles |
+| Skip task buttons in dashboard | Writes `commands.json` | Done | Per-task skip button on pending tasks in TaskPlan component |
+| Settings panel in dashboard | Writes `commands.json` | Done | SettingsPanel component, POSTs to `/api/settings` via serve.py; mode, validation, compaction interval, max turns, delay |
 | Orchestrator reads `commands.json` | Each iteration | Done (PR 4) | `check_and_handle_commands()` in `telemetry.sh`, wired into `ralph.sh` main loop |
-| `skip-task` command handler | Add to `process_control_commands()` | Not done |
-| Tiny HTTP server for writes | `.ralph/serve.py` | Not done |
+| `skip-task` command handler | Add to `process_control_commands()` | Done | Sets task status to "skipped" via `set_task_status()`, emits `skip_task` event; graceful degradation if `set_task_status` unavailable |
+| Tiny HTTP server for writes | `.ralph/serve.py` | Done | 155 lines: serves static files + POST `/api/command` and `/api/settings`; atomic writes via temp-then-rename; CORS support; input sanitization for settings |
+| Tests for skip-task | Update `tests/telemetry.bats` | Done | 4 new tests (skip with set_task_status, event emission, without set_task_status, pending cleared) |
+
+**Completion: 100%** — 36 telemetry tests pass (32 original + 4 new). All 191 non-git-signing tests pass.
 
 ---
 
@@ -129,5 +132,5 @@
 | PR 3 | Knowledge indexer | Implemented |
 | PR 4 | Telemetry module | Implemented |
 | PR 5 | Dashboard (read-only) | Implemented |
-| PR 6 | Control plane | Not started |
+| PR 6 | Control plane | Implemented |
 | PR 7 | Documentation | Not started |

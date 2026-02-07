@@ -143,17 +143,31 @@ This is a working reference file — not a handoff prompt. For current status, s
 
 ---
 
-## PR 6: Control Plane — NOT STARTED
+## PR 6: Control Plane — IMPLEMENTED
 
-**Planned work:**
-1. Pause/Resume toggle → enqueues `{"command": "pause"}` / `{"command": "resume"}` to `commands.json`
-2. Inject Note textarea → enqueues `{"command": "inject-note", "note": "..."}`
-3. Skip Task button → enqueues `{"command": "skip-task", "task_id": "..."}` (needs new handler in `telemetry.sh`)
-4. Settings panel (optional) — mode switch, validation strategy, compaction threshold
-5. Tiny HTTP server (`.ralph/serve.py`, ~30 lines) for dashboard write support
-6. `skip-task` command handling in `process_control_commands()` in `telemetry.sh`
+**Files changed (3 files):**
 
-**Key constraint:** Dashboard runs in browser, cannot write local files directly. Recommended approach: minimal Python HTTP server with POST endpoint for `/api/command`.
+| File | Change |
+|------|--------|
+| `.ralph/serve.py` | **New.** 155-line Python HTTP server: static file serving from project root + POST `/api/command` (enqueues to `commands.json` pending array) + POST `/api/settings` (updates `ralph.conf` with allowlisted keys). Atomic writes via write-to-temp-then-rename. CORS preflight support. Input sanitization for settings values. |
+| `.ralph/lib/telemetry.sh` | Added `skip-task` case to `process_control_commands()` (~15 lines). Calls `set_task_status()` to mark task as "skipped". Emits `skip_task` event with task_id metadata. Graceful degradation: if `set_task_status` is not available (standalone testing), still emits event with `applied: false` metadata. |
+| `.ralph/dashboard.html` | Added ~200 lines: `ControlPlane()` component (pause/resume toggle, inject note textarea), `SettingsPanel()` component (mode, validation strategy, compaction interval, max turns, delay), skip-task buttons on pending tasks in `TaskPlan()`, persistent `formState` object for form values across full-rebuild render cycles, `postCommand()` and `postSettings()` API helpers, command status flash notifications. Updated file:// warning to recommend `serve.py`. |
+| `tests/telemetry.bats` | 4 new tests for skip-task: with set_task_status available, event emission, without set_task_status, pending cleared after processing. |
+
+**Test results:** 36 telemetry tests (32 original + 4 new), all 191 non-git-signing tests pass.
+
+**Design decisions:**
+- **serve.py architecture:** Single-file HTTP server extending `SimpleHTTPRequestHandler`. Serves all static files (dashboard, state.json, handoffs, etc.) and adds two POST endpoints. Uses `os.replace()` for atomic writes, preventing race conditions with the orchestrator reading `commands.json` simultaneously.
+- **Settings allowlist:** Only `RALPH_MODE`, `RALPH_VALIDATION_STRATEGY`, `RALPH_COMPACTION_INTERVAL`, `RALPH_DEFAULT_MAX_TURNS`, `RALPH_MIN_DELAY_SECONDS` can be updated via the dashboard. Values are sanitized to alphanumeric + hyphens + underscores only.
+- **Form state persistence:** The `formState` object lives outside the `render()` function, persisting textarea content and panel open/close state across the full-rebuild render cycle (constraint from PR 5).
+- **Skip task flow:** Dashboard POSTs `{"command": "skip-task", "task_id": "TASK-NNN"}` → serve.py enqueues to `commands.json` → orchestrator's `process_control_commands()` reads it → calls `set_task_status(plan_file, task_id, "skipped")` → `is_plan_complete()` treats "skipped" as complete (already handled by plan-ops.sh).
+- **Command status flash:** After any API call, a temporary status banner shows success/failure for 5 seconds. Cleared on next render cycle by timestamp check.
+
+**Constraints discovered:**
+- **CORS required:** Even when serving from the same origin via serve.py, some browser configurations require explicit CORS headers. Added `Access-Control-Allow-Origin: *` to all API responses and a `do_OPTIONS()` handler for preflight.
+- **Settings updates are regex-based:** The serve.py settings endpoint uses regex substitution on `ralph.conf`, which means it can only update existing keys (won't add new ones). This is intentional — the conf file is the authoritative template.
+
+---
 
 ---
 

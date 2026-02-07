@@ -80,8 +80,9 @@ clear_pending_commands() {
 }
 
 # process_control_commands — Read, execute, and clear pending commands
-# Processes: pause, resume, inject-note
+# Processes: pause, resume, inject-note, skip-task
 # Sets RALPH_PAUSED=true on pause, RALPH_PAUSED=false on resume
+# skip-task sets the task status to "skipped" via set_task_status() if available
 # Returns: 0
 process_control_commands() {
     local commands
@@ -117,6 +118,21 @@ process_control_commands() {
                 note="$(echo "$cmd_obj" | jq -r '.note // "no note"')"
                 emit_event "note" "$note"
                 log "info" "Operator note injected: $note"
+                ;;
+            skip-task)
+                local skip_task_id
+                skip_task_id="$(echo "$cmd_obj" | jq -r '.task_id // "unknown"')"
+                if declare -f set_task_status >/dev/null 2>&1; then
+                    local plan_file="${RALPH_PLAN_FILE:-plan.json}"
+                    set_task_status "$plan_file" "$skip_task_id" "skipped"
+                    emit_event "skip_task" "Operator skipped task $skip_task_id" \
+                        "$(jq -cn --arg task_id "$skip_task_id" '{task_id: $task_id}')"
+                    log "info" "Operator skipped task: $skip_task_id"
+                else
+                    emit_event "skip_task" "Skip requested for $skip_task_id (set_task_status unavailable)" \
+                        "$(jq -cn --arg task_id "$skip_task_id" '{task_id: $task_id, applied: false}')"
+                    log "warn" "skip-task: set_task_status not available, skip not applied"
+                fi
                 ;;
             *)
                 log "warn" "Unknown control command: $command"

@@ -255,6 +255,91 @@ EOF
     [[ "$status" -eq 0 ]]
 }
 
+# --- skip-task command ---
+
+@test "process_control_commands handles skip-task with set_task_status available" {
+    # Create a mock plan file and set_task_status function
+    local plan_file="$TEST_DIR/plan.json"
+    export RALPH_PLAN_FILE="$plan_file"
+    cat > "$plan_file" <<'EOF'
+{"tasks":[{"id":"TASK-001","title":"Test task","status":"pending"}]}
+EOF
+
+    # Define set_task_status mock
+    set_task_status() {
+        local pf="$1" tid="$2" ns="$3"
+        local tmp; tmp="$(mktemp)"
+        jq --arg id "$tid" --arg status "$ns" \
+            '.tasks = [.tasks[] | if .id == $id then .status = $status else . end]' \
+            "$pf" > "$tmp" && mv "$tmp" "$pf"
+    }
+    export -f set_task_status
+
+    cat > "$RALPH_CONTROL_FILE" <<'EOF'
+{"pending":[{"command":"skip-task","task_id":"TASK-001"}]}
+EOF
+    process_control_commands
+
+    # Verify task was marked skipped
+    local task_status
+    task_status="$(jq -r '.tasks[0].status' "$plan_file")"
+    [[ "$task_status" == "skipped" ]]
+}
+
+@test "process_control_commands emits skip_task event" {
+    export RALPH_PLAN_FILE="$TEST_DIR/plan.json"
+    cat > "$TEST_DIR/plan.json" <<'EOF'
+{"tasks":[{"id":"TASK-002","title":"Another task","status":"pending"}]}
+EOF
+
+    set_task_status() {
+        local pf="$1" tid="$2" ns="$3"
+        local tmp; tmp="$(mktemp)"
+        jq --arg id "$tid" --arg status "$ns" \
+            '.tasks = [.tasks[] | if .id == $id then .status = $status else . end]' \
+            "$pf" > "$tmp" && mv "$tmp" "$pf"
+    }
+    export -f set_task_status
+
+    cat > "$RALPH_CONTROL_FILE" <<'EOF'
+{"pending":[{"command":"skip-task","task_id":"TASK-002"}]}
+EOF
+    process_control_commands
+
+    local event_type
+    event_type="$(head -1 "$RALPH_EVENTS_FILE" | jq -r '.event')"
+    [[ "$event_type" == "skip_task" ]]
+
+    local task_id
+    task_id="$(head -1 "$RALPH_EVENTS_FILE" | jq -r '.metadata.task_id')"
+    [[ "$task_id" == "TASK-002" ]]
+}
+
+@test "process_control_commands skip-task without set_task_status still emits event" {
+    # Unset set_task_status if it exists
+    unset -f set_task_status 2>/dev/null || true
+
+    cat > "$RALPH_CONTROL_FILE" <<'EOF'
+{"pending":[{"command":"skip-task","task_id":"TASK-003"}]}
+EOF
+    process_control_commands
+
+    local event_type
+    event_type="$(head -1 "$RALPH_EVENTS_FILE" | jq -r '.event')"
+    [[ "$event_type" == "skip_task" ]]
+}
+
+@test "process_control_commands skip-task clears pending after processing" {
+    cat > "$RALPH_CONTROL_FILE" <<'EOF'
+{"pending":[{"command":"skip-task","task_id":"TASK-001"}]}
+EOF
+    process_control_commands
+
+    local count
+    count="$(jq '.pending | length' "$RALPH_CONTROL_FILE")"
+    [[ "$count" -eq 0 ]]
+}
+
 # --- wait_while_paused ---
 
 @test "wait_while_paused returns immediately when not paused" {
