@@ -1,0 +1,143 @@
+{
+  "project": "ralph-deluxe-progress-log",
+  "branch": "main",
+  "max_iterations": 25,
+  "validation_strategy": "strict",
+  "tasks": [
+    {
+      "id": "PLOG-001",
+      "title": "Progress log library module — formatting functions",
+      "description": "Create .ralph/lib/progress-log.sh with format_progress_entry_md() and format_progress_entry_json(). These extract structured fields from a handoff JSON file and produce a markdown block and a JSON object respectively. Markdown omits empty sections. JSON includes all fields with empty arrays for missing data. Both read task title from plan.json via get_task_by_id() when available.",
+      "status": "pending",
+      "order": 1,
+      "skills": ["bash-conventions", "jq-patterns"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "format_progress_entry_md produces valid markdown with all sections from a full handoff",
+        "format_progress_entry_md omits empty sections (no header when array is empty)",
+        "format_progress_entry_json produces valid JSON (passes jq . validation)",
+        "format_progress_entry_json extracts title from plan.json when get_task_by_id is available",
+        "Both functions handle handoffs with all-empty optional arrays",
+        "shellcheck passes on progress-log.sh",
+        "File uses #!/usr/bin/env bash and set -euo pipefail"
+      ],
+      "depends_on": [],
+      "max_turns": 20,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "PLOG-002",
+      "title": "Progress log library module — append and init functions",
+      "description": "Add append_progress_entry() and init_progress_log() to .ralph/lib/progress-log.sh. append_progress_entry calls the formatting functions, appends the markdown entry to .ralph/progress-log.md, and upserts the JSON entry into .ralph/progress-log.json's entries array. It also regenerates the plan_summary section from plan.json. init_progress_log creates both files with initial structure if they don't exist. Uses atomic write pattern (tmp + mv) for JSON.",
+      "status": "pending",
+      "order": 2,
+      "skills": ["bash-conventions", "jq-patterns"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "append_progress_entry creates progress-log.md and progress-log.json when they don't exist",
+        "append_progress_entry appends a second entry without overwriting the first",
+        "append_progress_entry updates plan_summary counts in JSON from plan.json",
+        "JSON validates with jq . after multiple appends",
+        "Markdown contains summary table with correct task counts",
+        "init_progress_log is idempotent (running twice doesn't duplicate content)",
+        "JSON uses atomic write pattern (tmp + mv)"
+      ],
+      "depends_on": ["PLOG-001"],
+      "max_turns": 20,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "PLOG-003",
+      "title": "Orchestrator integration — wire progress log into ralph.sh",
+      "description": "Add append_progress_entry() call to ralph.sh main loop: (1) After validation pass in real mode, between set_task_status done and apply_amendments. (2) After set_task_status done in dry-run mode. (3) Add init_progress_log() call at startup after source_libs and init_control_file. All calls guarded with declare -f pattern. Failures are non-fatal (log warn, continue).",
+      "status": "pending",
+      "order": 3,
+      "skills": ["bash-conventions"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "Progress log entry written after each successful iteration in real mode",
+        "Progress log entry written after each dry-run iteration",
+        "Progress log files initialized at orchestrator startup",
+        "Failure in append_progress_entry does not halt the orchestrator",
+        "Orchestrator works correctly if progress-log.sh is not sourced (graceful degradation)",
+        "bash -n ralph.sh passes syntax check",
+        "shellcheck ralph.sh passes"
+      ],
+      "depends_on": ["PLOG-002"],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "PLOG-004",
+      "title": "Dashboard ProgressLog panel",
+      "description": "Add ProgressLog component to dashboard.html. Polls .ralph/progress-log.json every 3s. Summary view shows plan_summary as status bar and task table with summaries. Detail view shows expandable entries with all fields (files, tests, decisions, constraints, deviations, bugs). Entries are collapsible. Place panel between HandoffViewer and KnowledgeIndex. Follow existing component patterns: h() helper, StatusBadge reuse, bg-zinc-900 container styling.",
+      "status": "pending",
+      "order": 4,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "Dashboard polls .ralph/progress-log.json every 3 seconds",
+        "Summary view shows task completion counts from plan_summary",
+        "Detail view renders all progress entry fields",
+        "Empty state shows 'No progress entries yet' message",
+        "Entries are expandable/collapsible",
+        "Panel renders correctly when progress-log.json doesn't exist",
+        "Follows existing dashboard component patterns (h() helper, StatusBadge)"
+      ],
+      "depends_on": ["PLOG-001"],
+      "max_turns": 25,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "PLOG-005",
+      "title": "Test suite for progress log module",
+      "description": "Create tests/progress-log.bats with ~20 tests covering format_progress_entry_md (7 tests: all sections, empty section omission, file count), format_progress_entry_json (5 tests: valid JSON, all fields, title lookup, fallback, empty arrays), append_progress_entry (5 tests: create files, append without overwrite, plan_summary, json validity, markdown table), init_progress_log (3 tests: creates files, idempotent, empty structure). Add 2-3 integration tests to tests/integration.bats.",
+      "status": "pending",
+      "order": 5,
+      "skills": ["testing-bats", "bash-conventions", "jq-patterns"],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "All bats tests pass",
+        "Tests run in temp directories (no project pollution)",
+        "Each test is independent (setup/teardown isolation)",
+        "Edge cases covered: empty handoffs, missing files, repeated calls",
+        "Integration tests verify progress log files created after dry-run",
+        "Integration tests verify no progress log entry after validation failure",
+        "Tests run in under 10 seconds"
+      ],
+      "depends_on": ["PLOG-002", "PLOG-003"],
+      "max_turns": 25,
+      "retry_count": 0,
+      "max_retries": 2
+    },
+    {
+      "id": "PLOG-006",
+      "title": "Documentation update for progress log feature",
+      "description": "Update README.md: add Progress Log to features list, add .ralph/progress-log.md and .ralph/progress-log.json to directory structure, add Progress Log subsection, mention dashboard panel. Update CLAUDE.md: add new files to directory structure, add progress-log.sh to modules list, add progress-log.bats to testing section.",
+      "status": "pending",
+      "order": 6,
+      "skills": [],
+      "needs_docs": false,
+      "libraries": [],
+      "acceptance_criteria": [
+        "README documents the progress log feature and its auto-generation",
+        "README directory structure includes progress-log.md, progress-log.json, progress-log.sh",
+        "CLAUDE.md directory structure includes new files",
+        "Documentation is consistent with implementation"
+      ],
+      "depends_on": ["PLOG-003", "PLOG-004", "PLOG-005"],
+      "max_turns": 15,
+      "retry_count": 0,
+      "max_retries": 2
+    }
+  ]
+}
