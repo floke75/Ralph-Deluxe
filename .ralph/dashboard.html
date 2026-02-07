@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ralph Deluxe — Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-300">
+
+<div id="app"></div>
+
+<script>
+// ============================================================
+// Ralph Deluxe Dashboard — Single-file vanilla JS + Tailwind
+// Read-only view. Polls local files every 3 seconds.
+// Serve via: python3 -m http.server 8080
+// Then open: http://localhost:8080/.ralph/dashboard.html
+// ============================================================
+
+// --- Global State ---
+const state = {
+  orchestrator: {
+    current_iteration: 0,
+    last_compaction_iteration: 0,
+    coding_iterations_since_compaction: 0,
+    total_handoff_bytes_since_compaction: 0,
+    last_task_id: null,
+    started_at: null,
+    status: "idle",
+    mode: "handoff-only"
+  },
+  plan: { project: "", tasks: [] },
+  handoffs: [],
+  knowledgeIndex: [],
+  events: [],
+  // UI state
+  selectedHandoff: 0,
+  activeTab: "dashboard",
+  viewMode: null, // null = use orchestrator mode; set by toggle
+  error: null
+};
+
+// --- Fetch Helpers ---
+// Base path: dashboard lives at .ralph/dashboard.html, project root is ../
+const BASE = "../";
+
+async function fetchJSON(path) {
+  const resp = await fetch(BASE + path, { cache: "no-store" });
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+async function fetchText(path) {
+  const resp = await fetch(BASE + path, { cache: "no-store" });
+  if (!resp.ok) return null;
+  return resp.text();
+}
+
+function parseJSONL(text) {
+  if (!text) return [];
+  return text.trim().split("\n").filter(Boolean).map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
+// --- Data Polling ---
+async function pollData() {
+  try {
+    // Fetch all data sources in parallel
+    const [orchState, plan, indexData, eventsText] = await Promise.all([
+      fetchJSON(".ralph/state.json"),
+      fetchJSON("plan.json"),
+      fetchJSON(".ralph/knowledge-index.json"),
+      fetchText(".ralph/logs/events.jsonl")
+    ]);
+
+    if (orchState) state.orchestrator = orchState;
+    if (plan) state.plan = plan;
+    if (indexData) state.knowledgeIndex = Array.isArray(indexData) ? indexData : [];
+    state.events = parseJSONL(eventsText);
+
+    // Discover handoffs based on iteration count or probe sequentially
+    const maxIter = state.orchestrator.current_iteration || 0;
+    const handoffPromises = [];
+    // Probe up to maxIter + 5 to be safe, or at least 20
+    const probeMax = Math.max(maxIter + 5, 20);
+    for (let i = 1; i <= probeMax; i++) {
+      const num = String(i).padStart(3, "0");
+      handoffPromises.push(fetchJSON(`.ralph/handoffs/handoff-${num}.json`));
+    }
+    const handoffResults = await Promise.all(handoffPromises);
+    state.handoffs = handoffResults.filter(Boolean);
+
+    // Auto-select latest handoff if we haven't interacted
+    if (state.handoffs.length > 0 && state.selectedHandoff >= state.handoffs.length) {
+      state.selectedHandoff = state.handoffs.length - 1;
+    }
+
+    state.error = null;
+  } catch (err) {
+    state.error = "Polling error: " + err.message;
+  }
+
+  render();
+}
+
+// --- Computed Metrics ---
+function computeMetrics() {
+  const events = state.events;
+  const handoffs = state.handoffs;
+  const tasks = state.plan.tasks || [];
+
+  const iterStarts = events.filter(e => e.event === "iteration_start");
+  const valPass = events.filter(e => e.event === "validation_pass").length;
+  const valFail = events.filter(e => e.event === "validation_fail").length;
+
+  // Count rollbacks from validation_fail events
+  const rollbacks = valFail;
+
+  // Total files touched across all handoffs
+  let totalFiles = 0;
+  for (const h of handoffs) {
+    const ft = h.files_touched;
+    if (Array.isArray(ft)) totalFiles += ft.length;
+    else if (typeof ft === "number") totalFiles += ft;
+  }
+
+  // Average iteration duration from events
+  let avgDuration = 0;
+  const iterEnds = events.filter(e => e.event === "iteration_end");
+  if (iterStarts.length > 0 && iterEnds.length > 0) {
+    let totalMs = 0;
+    let counted = 0;
+    for (let i = 0; i < Math.min(iterStarts.length, iterEnds.length); i++) {
+      const start = new Date(iterStarts[i].timestamp).getTime();
+      const end = new Date(iterEnds[i].timestamp).getTime();
+      if (end > start) { totalMs += (end - start); counted++; }
+    }
+    if (counted > 0) avgDuration = Math.round(totalMs / counted / 1000);
+  }
+
+  // Compaction count
+  const compactions = events.filter(e =>
+    e.event === "iteration_start" && e.metadata && e.metadata.mode === "compaction"
+  ).length;
+
+  // Elapsed time
+  let elapsed = 0;
+  const startedAt = state.orchestrator.started_at;
+  if (startedAt) {
+    elapsed = Math.round((Date.now() - new Date(startedAt).getTime()) / 60000);
+  }
+
+  const tasksDone = tasks.filter(t => t.status === "done").length;
+
+  return {
+    iteration: state.orchestrator.current_iteration || handoffs.length,
+    tasksDone,
+    tasksTotal: tasks.length,
+    valPass,
+    valFail,
+    rollbacks,
+    avgDuration,
+    totalFiles,
+    compactions,
+    elapsed
+  };
+}
+
+// --- Rendering Helpers ---
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "className") el.className = v;
+      else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k === "title") el.title = v;
+      else if (k === "innerHTML") el.innerHTML = v;
+      else el.setAttribute(k, v);
+    }
+  }
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    if (typeof child === "string" || typeof child === "number") {
+      el.appendChild(document.createTextNode(String(child)));
+    } else if (child instanceof Node) {
+      el.appendChild(child);
+    }
+  }
+  return el;
+}
+
+// --- Components ---
+function StatusBadge(status) {
+  const colors = {
+    done: "bg-emerald-900/60 text-emerald-300 border-emerald-700/50",
+    in_progress: "bg-amber-900/60 text-amber-300 border-amber-700/50",
+    pending: "bg-zinc-800/60 text-zinc-400 border-zinc-700/50",
+    failed: "bg-red-900/60 text-red-300 border-red-700/50",
+    skipped: "bg-zinc-800/40 text-zinc-500 border-zinc-700/30",
+    running: "bg-blue-900/60 text-blue-300 border-blue-600/50",
+    idle: "bg-zinc-800/60 text-zinc-400 border-zinc-700/50",
+    paused: "bg-orange-900/60 text-orange-300 border-orange-700/50",
+    completed: "bg-emerald-900/60 text-emerald-300 border-emerald-700/50",
+  };
+  return h("span", {
+    className: `px-2 py-0.5 rounded text-xs font-mono border ${colors[status] || colors.pending}`
+  }, status || "unknown");
+}
+
+function ModeToggle() {
+  const mode = getViewMode();
+  const container = h("div", { className: "flex items-center gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800" });
+
+  container.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider font-semibold" }, "Mode"));
+
+  const btnBg = mode === "handoff-only" ? "#1e293b" : "#1e1b2e";
+  const sliderW = mode === "handoff-only" ? "105px" : "125px";
+  const sliderL = mode === "handoff-only" ? "2px" : "93px";
+  const sliderBg = mode === "handoff-only" ? "#2563eb" : "#7c3aed";
+
+  const btn = h("button", {
+    className: "relative flex items-center h-7 rounded-full transition-colors",
+    style: { width: "220px", background: btnBg },
+    onClick: () => {
+      state.viewMode = mode === "handoff-only" ? "handoff-plus-index" : "handoff-only";
+      render();
+    }
+  });
+
+  const slider = h("div", {
+    className: "absolute h-6 rounded-full transition-all duration-300 ease-out",
+    style: { width: sliderW, left: sliderL, background: sliderBg }
+  });
+  btn.appendChild(slider);
+
+  btn.appendChild(h("span", {
+    className: `relative z-10 text-xs font-medium px-3 transition-colors ${mode === "handoff-only" ? "text-white" : "text-zinc-500"}`
+  }, "Handoff Only"));
+
+  btn.appendChild(h("span", {
+    className: `relative z-10 text-xs font-medium px-3 transition-colors ${mode === "handoff-plus-index" ? "text-white" : "text-zinc-500"}`
+  }, "+ Knowledge Index"));
+
+  container.appendChild(btn);
+  return container;
+}
+
+function getViewMode() {
+  return state.viewMode || state.orchestrator.mode || "handoff-only";
+}
+
+function MetricsStrip() {
+  const m = computeMetrics();
+  const items = [
+    { label: "Iteration", value: m.iteration, accent: "text-blue-400" },
+    { label: "Tasks Done", value: `${m.tasksDone}/${m.tasksTotal}`, accent: "text-emerald-400" },
+    { label: "Validations", value: `${m.valPass}\u2713 ${m.valFail}\u2717`, accent: "text-zinc-300" },
+    { label: "Rollbacks", value: m.rollbacks, accent: m.rollbacks > 0 ? "text-red-400" : "text-zinc-500" },
+    { label: "Avg Duration", value: m.avgDuration > 0 ? `${m.avgDuration}s` : "\u2014", accent: "text-zinc-300" },
+    { label: "Files \u0394", value: m.totalFiles, accent: "text-zinc-300" },
+    { label: "Compactions", value: m.compactions, accent: "text-violet-400" },
+    { label: "Elapsed", value: m.elapsed > 0 ? `${m.elapsed}m` : "\u2014", accent: "text-zinc-300" },
+  ];
+
+  const grid = h("div", { className: "grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2" });
+  for (const item of items) {
+    grid.appendChild(h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg p-2 text-center" },
+      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider" }, item.label),
+      h("div", { className: `text-lg font-mono font-bold ${item.accent}` }, String(item.value))
+    ));
+  }
+  return grid;
+}
+
+function TaskPlan() {
+  const tasks = state.plan.tasks || [];
+  const currentTask = state.orchestrator.last_task_id;
+  const doneTasks = tasks.filter(t => t.status === "done").length;
+
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  // Header
+  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Task Plan"));
+  header.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${doneTasks}/${tasks.length} complete`));
+  panel.appendChild(header);
+
+  // Task list
+  const list = h("div", { className: "divide-y divide-zinc-800/50" });
+  for (const task of tasks) {
+    const isCurrent = task.id === currentTask;
+    const row = h("div", {
+      className: `flex items-center gap-3 px-4 py-2 transition-colors ${
+        isCurrent ? "bg-blue-950/30 border-l-2 border-blue-500" : "border-l-2 border-transparent"
+      }`
+    });
+    row.appendChild(h("span", { className: "text-xs text-zinc-600 font-mono w-16" }, task.id));
+    row.appendChild(h("span", {
+      className: `flex-1 text-sm ${
+        task.status === "done" ? "text-zinc-500 line-through" :
+        isCurrent ? "text-zinc-200" : "text-zinc-400"
+      }`
+    }, task.title));
+    row.appendChild(StatusBadge(task.status));
+    list.appendChild(row);
+  }
+  panel.appendChild(list);
+  return panel;
+}
+
+function HandoffViewer() {
+  const handoffs = state.handoffs;
+  const panel = h("div", {
+    className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden flex flex-col",
+    style: { minHeight: "400px" }
+  });
+
+  // Header with iteration selectors
+  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Handoff Documents"));
+
+  if (handoffs.length === 0) {
+    panel.appendChild(header);
+    panel.appendChild(h("div", { className: "flex-1 flex items-center justify-center p-4" },
+      h("div", { className: "text-xs text-zinc-600 italic" }, "No handoff documents yet. They appear after the first iteration completes.")
+    ));
+    return panel;
+  }
+
+  const selector = h("div", { className: "flex gap-1 flex-wrap" });
+  handoffs.forEach((ho, i) => {
+    const iter = ho.task_completed ? ho.task_completed.task_id : (i + 1);
+    const isComplete = ho.task_completed ? ho.task_completed.fully_complete : false;
+    const valPassed = ho.validation_passed;
+
+    let btnClass;
+    if (i === state.selectedHandoff) {
+      btnClass = "bg-blue-600 text-white";
+    } else if (valPassed === null || valPassed === undefined) {
+      btnClass = "bg-amber-900/40 text-amber-400 border border-amber-800/50";
+    } else if (isComplete) {
+      btnClass = "bg-zinc-800 text-zinc-400 hover:bg-zinc-700";
+    } else {
+      btnClass = "bg-zinc-800 text-zinc-500 hover:bg-zinc-700 border border-dashed border-zinc-700";
+    }
+
+    selector.appendChild(h("button", {
+      className: `w-7 h-7 rounded text-xs font-mono transition-colors ${btnClass}`,
+      onClick: () => { state.selectedHandoff = i; render(); }
+    }, String(i + 1)));
+  });
+  header.appendChild(selector);
+  panel.appendChild(header);
+
+  // Selected handoff content
+  const ho = handoffs[state.selectedHandoff];
+  if (!ho) return panel;
+
+  const content = h("div", { className: "flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin" });
+
+  // Normalize handoff shape (schema uses task_completed.{task_id, summary, fully_complete})
+  const taskId = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
+  const summary = ho.summary || (ho.task_completed ? ho.task_completed.summary : "");
+  const freeform = ho.freeform || "";
+  const isComplete = ho.task_completed ? ho.task_completed.fully_complete : (ho.fully_complete || false);
+  const valPassed = ho.validation_passed;
+  const filesTouched = ho.files_touched || [];
+  const deviations = ho.deviations || [];
+  const constraints = ho.constraints_discovered || ho.constraints || [];
+  const archNotes = ho.architectural_notes || [];
+  const timestamp = ho.timestamp || "";
+
+  // Determine file count
+  const fileCount = Array.isArray(filesTouched) ? filesTouched.length : (typeof filesTouched === "number" ? filesTouched : 0);
+
+  // Header line
+  const hdrRow = h("div", { className: "flex items-center gap-3 flex-wrap" });
+  hdrRow.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, taskId));
+  if (timestamp) {
+    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u2022"));
+    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-500" },
+      timestamp.includes("T") ? new Date(timestamp).toLocaleTimeString() : timestamp
+    ));
+  }
+  hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u2022"));
+  const badgeStatus = valPassed === null || valPassed === undefined
+    ? "running" : isComplete ? "done" : "in_progress";
+  hdrRow.appendChild(StatusBadge(badgeStatus));
+  if (fileCount > 0) {
+    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, `${fileCount} files`));
+  }
+  content.appendChild(hdrRow);
+
+  // Summary
+  if (summary) {
+    content.appendChild(h("div", {},
+      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Summary"),
+      h("div", { className: "text-sm text-zinc-300" }, summary)
+    ));
+  }
+
+  // Freeform notes
+  if (freeform) {
+    const freeformBox = h("div", { className: "bg-zinc-950/60 border border-zinc-800/80 rounded-lg p-3" });
+    freeformBox.appendChild(h("div", { className: "text-xs text-blue-400 uppercase tracking-wider mb-2 flex items-center gap-1.5" },
+      h("span", {}, "\u25C6"), " Handoff Notes"
+    ));
+    freeformBox.appendChild(h("div", {
+      className: "text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed font-mono",
+      style: { fontSize: "12.5px" }
+    }, freeform));
+    content.appendChild(freeformBox);
+  }
+
+  // Deviations
+  if (deviations.length > 0) {
+    const devSection = h("div", {});
+    devSection.appendChild(h("div", { className: "text-xs text-amber-500 uppercase tracking-wider mb-1" }, "Deviations"));
+    for (const d of deviations) {
+      devSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+        h("span", { className: "text-zinc-500" }, d.planned),
+        h("span", { className: "text-zinc-600" }, " \u2192 "),
+        h("span", { className: "text-zinc-300" }, d.actual),
+        h("span", { className: "text-zinc-600" }, " \u2014 "),
+        h("span", { className: "text-zinc-500 italic" }, d.reason)
+      ));
+    }
+    content.appendChild(devSection);
+  }
+
+  // Constraints
+  if (constraints.length > 0) {
+    const conSection = h("div", {});
+    conSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Constraints Discovered"));
+    for (const c of constraints) {
+      conSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+        h("span", { className: "text-zinc-300" }, c.constraint),
+        h("span", { className: "text-zinc-600" }, " \u2014 "),
+        h("span", { className: "text-zinc-500" }, c.impact)
+      ));
+    }
+    content.appendChild(conSection);
+  }
+
+  // Architectural notes
+  if (archNotes.length > 0) {
+    const archSection = h("div", {});
+    archSection.appendChild(h("div", { className: "text-xs text-emerald-500 uppercase tracking-wider mb-1" }, "Architecture"));
+    for (const note of archNotes) {
+      archSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" }, "\u2022 " + note));
+    }
+    content.appendChild(archSection);
+  }
+
+  // Files touched (expanded view)
+  if (Array.isArray(filesTouched) && filesTouched.length > 0 && typeof filesTouched[0] === "object") {
+    const filesSection = h("div", {});
+    filesSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Files Touched"));
+    for (const f of filesTouched) {
+      const actionColor = f.action === "created" ? "text-emerald-500" :
+                           f.action === "deleted" ? "text-red-500" : "text-blue-400";
+      filesSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+        h("span", { className: `${actionColor} mr-2` }, f.action),
+        h("span", { className: "text-zinc-500 font-mono" }, f.path)
+      ));
+    }
+    content.appendChild(filesSection);
+  }
+
+  panel.appendChild(content);
+  return panel;
+}
+
+function KnowledgeIndex() {
+  const mode = getViewMode();
+
+  if (mode === "handoff-only") {
+    return h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg p-4" },
+      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-2" }, "Knowledge Index"),
+      h("div", { className: "text-xs text-zinc-600 italic" },
+        "Disabled in handoff-only mode. Switch to handoff + knowledge index to enable periodic compaction passes that organize accumulated insights into a searchable index."
+      )
+    );
+  }
+
+  const index = state.knowledgeIndex;
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  // Header
+  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Knowledge Index"));
+  const lastIter = index.length > 0 ? index[index.length - 1].iteration : 0;
+  header.appendChild(h("span", { className: "text-xs text-violet-400 font-mono" },
+    lastIter > 0 ? `Last organized: iter ${lastIter}` : "No entries yet"
+  ));
+  panel.appendChild(header);
+
+  if (index.length === 0) {
+    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+      "No knowledge index entries yet. They appear after the first compaction pass."
+    ));
+    return panel;
+  }
+
+  // Table
+  const tableWrap = h("div", { className: "overflow-x-auto" });
+  const table = h("table", { className: "w-full text-xs" });
+
+  const thead = h("thead", {});
+  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800" });
+  for (const col of ["Iter", "Task", "Summary", "Tags"]) {
+    headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium" }, col));
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = h("tbody", { className: "divide-y divide-zinc-800/50" });
+  for (const entry of index) {
+    const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
+    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, String(entry.iteration)));
+    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, entry.task));
+    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry.summary));
+
+    const tagCell = h("td", { className: "px-3 py-1.5" });
+    const tagWrap = h("div", { className: "flex gap-1 flex-wrap" });
+    for (const tag of (entry.tags || [])) {
+      tagWrap.appendChild(h("span", {
+        className: "px-1.5 py-0.5 rounded bg-violet-950/50 text-violet-400 border border-violet-800/30 text-xs"
+      }, tag));
+    }
+    tagCell.appendChild(tagWrap);
+    row.appendChild(tagCell);
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  panel.appendChild(tableWrap);
+
+  panel.appendChild(h("div", { className: "px-4 py-2 border-t border-zinc-800 text-xs text-zinc-600" },
+    "The coding agent receives this index as a header. It can ",
+    h("code", { className: "text-zinc-400" }, "grep"),
+    " or read specific ",
+    h("code", { className: "text-zinc-400" }, "handoff-NNN.json"),
+    " files for details."
+  ));
+
+  return panel;
+}
+
+function GitTimeline() {
+  const handoffs = state.handoffs;
+  const events = state.events;
+
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+  panel.appendChild(h("div", { className: "px-4 py-2.5 border-b border-zinc-800" },
+    h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Git Timeline")
+  ));
+
+  // Build timeline from handoffs or events
+  const timelineData = [];
+  if (handoffs.length > 0) {
+    for (const ho of handoffs) {
+      const taskId = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
+      const valPassed = ho.validation_passed;
+      timelineData.push({ taskId, valPassed });
+    }
+  } else if (events.length > 0) {
+    // Fallback: build from iteration events
+    const iterEvents = events.filter(e => e.event === "iteration_end" || e.event === "validation_pass" || e.event === "validation_fail");
+    for (const ev of iterEvents) {
+      timelineData.push({
+        taskId: ev.metadata ? ev.metadata.task_id : "",
+        valPassed: ev.event === "validation_pass" ? true : ev.event === "validation_fail" ? false : null
+      });
+    }
+  }
+
+  if (timelineData.length === 0) {
+    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+      "No iterations yet."
+    ));
+    return panel;
+  }
+
+  const body = h("div", { className: "p-4" });
+  const timeline = h("div", { className: "flex items-center gap-0.5 overflow-x-auto pb-2" });
+
+  timelineData.forEach((item, i) => {
+    const wrapper = h("div", { className: "flex items-center" });
+
+    let dotClass;
+    if (item.valPassed === null || item.valPassed === undefined) {
+      dotClass = "border-amber-500 bg-amber-500/20";
+    } else if (item.valPassed) {
+      dotClass = "border-emerald-500 bg-emerald-500/20";
+    } else {
+      dotClass = "border-red-500 bg-red-500/20";
+    }
+
+    wrapper.appendChild(h("div", {
+      className: `w-4 h-4 rounded-full border-2 flex-shrink-0 ${dotClass}`,
+      title: `Iteration ${i + 1}: ${item.taskId}`
+    }));
+
+    if (i < timelineData.length - 1) {
+      wrapper.appendChild(h("div", { className: "w-6 h-0.5 bg-zinc-700 flex-shrink-0" }));
+    }
+
+    timeline.appendChild(wrapper);
+  });
+
+  body.appendChild(timeline);
+  body.appendChild(h("div", { className: "flex justify-between text-xs text-zinc-600 mt-1 font-mono" },
+    h("span", {}, "iter 1"),
+    h("span", {}, `iter ${timelineData.length}`)
+  ));
+
+  panel.appendChild(body);
+  return panel;
+}
+
+function ArchDiagram() {
+  const mode = getViewMode();
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+  panel.appendChild(h("div", { className: "px-4 py-2.5 border-b border-zinc-800" },
+    h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" },
+      `Architecture \u2014 ${mode === "handoff-only" ? "Handoff Only" : "Handoff + Knowledge Index"}`
+    )
+  ));
+
+  const handoffOnlyDiagram = `
+  ┌─────────────────────────────────────────────┐
+  │               ralph.sh loop                 │
+  │                                             │
+  │  1. Read plan.json → next pending task      │
+  │  2. Assemble prompt:                        │
+  │     • task description                      │
+  │     • previous handoff (verbatim)           │
+  │     • skill files                           │
+  │  3. Create git checkpoint                   │
+  │  4. claude -p → coding iteration            │
+  │  5. Parse handoff from structured output    │
+  │  6. Run validation                          │
+  │  7. Pass → commit │ Fail → rollback         │
+  │  8. Save handoff → handoffs/NNN.json        │
+  │  9. Loop                                    │
+  │                                             │
+  │  Three artifacts:                           │
+  │  ┌──────┐  ┌─────────┐  ┌─────────────┐    │
+  │  │ Plan │→ │ Handoff  │→ │ Next prompt │    │
+  │  └──────┘  └─────────┘  └─────────────┘    │
+  └─────────────────────────────────────────────┘`;
+
+  const indexDiagram = `
+  ┌─────────────────────────────────────────────┐
+  │               ralph.sh loop                 │
+  │                                             │
+  │  CODING ITERATION (most loops):             │
+  │  1. Read plan.json → next pending task      │
+  │  2. Assemble prompt:                        │
+  │     • task description                      │
+  │     • previous handoff (verbatim)           │
+  │     • knowledge index header (lightweight)  │
+  │     • skill files                           │
+  │  3. Checkpoint → claude -p → validate       │
+  │  4. Commit/rollback → save handoff          │
+  │                                             │
+  │  COMPACTION ITERATION (every N loops):      │
+  │  1. Read all handoffs since last compaction  │
+  │  2. claude -p → organize into index         │
+  │  3. Output: index entries + tagged summaries │
+  │  4. Agent does NOT inject — just indexes     │
+  │                                             │
+  │  Three artifacts + index:                   │
+  │  ┌──────┐  ┌─────────┐  ┌───────┐          │
+  │  │ Plan │  │ Handoff  │  │ Index │          │
+  │  └──┬───┘  └────┬────┘  └───┬───┘          │
+  │     └─────┬─────┘           │               │
+  │     ┌─────▼─────┐    ┌─────▼─────┐         │
+  │     │Next prompt │    │ grep/read │         │
+  │     │(plan+hand) │    │ on demand │         │
+  │     └───────────┘    └───────────┘         │
+  └─────────────────────────────────────────────┘`;
+
+  panel.appendChild(h("div", { className: "p-4 font-mono text-xs leading-relaxed" },
+    h("pre", { className: "text-zinc-400 overflow-x-auto" },
+      mode === "handoff-only" ? handoffOnlyDiagram : indexDiagram
+    )
+  ));
+
+  return panel;
+}
+
+function EventLog() {
+  const events = state.events;
+  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+
+  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Event Log"));
+  header.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${events.length} events`));
+  panel.appendChild(header);
+
+  if (events.length === 0) {
+    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+      "No events yet. Events appear when the orchestrator starts running."
+    ));
+    return panel;
+  }
+
+  const eventColors = {
+    orchestrator_start: "text-blue-400",
+    orchestrator_end: "text-blue-400",
+    iteration_start: "text-zinc-400",
+    iteration_end: "text-zinc-400",
+    validation_pass: "text-emerald-400",
+    validation_fail: "text-red-400",
+    pause: "text-orange-400",
+    resume: "text-orange-400",
+    note: "text-violet-400",
+  };
+
+  // Show last 50 events, newest first
+  const recentEvents = events.slice(-50).reverse();
+  const list = h("div", { className: "max-h-64 overflow-y-auto divide-y divide-zinc-800/50 scrollbar-thin" });
+
+  for (const ev of recentEvents) {
+    const ts = ev.timestamp ? ev.timestamp.replace("T", " ").replace("Z", "") : "";
+    const shortTs = ts.length > 19 ? ts.slice(11, 19) : ts;
+    const color = eventColors[ev.event] || "text-zinc-500";
+
+    const row = h("div", { className: "px-4 py-1.5 flex items-center gap-3 text-xs" });
+    row.appendChild(h("span", { className: "text-zinc-600 font-mono w-16 flex-shrink-0" }, shortTs));
+    row.appendChild(h("span", { className: `font-mono ${color} w-32 flex-shrink-0` }, ev.event));
+    row.appendChild(h("span", { className: "text-zinc-500 truncate" }, ev.message || ""));
+    list.appendChild(row);
+  }
+
+  panel.appendChild(list);
+  return panel;
+}
+
+// --- Main Render ---
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  const status = state.orchestrator.status || "idle";
+  const mode = getViewMode();
+
+  // Header
+  const headerBar = h("div", { className: "border-b border-zinc-800 bg-zinc-950/95 sticky top-0 z-50" });
+  const headerInner = h("div", { className: "max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-2" });
+
+  // Left: title + status
+  const headerLeft = h("div", { className: "flex items-center gap-4" });
+  headerLeft.appendChild(h("h1", { className: "text-lg font-bold tracking-tight" },
+    h("span", { className: "text-blue-400" }, "Ralph"),
+    h("span", { className: "text-zinc-500" }, " Deluxe"),
+    h("span", { className: "text-zinc-700 text-xs ml-2" }, "v2")
+  ));
+
+  const statusGroup = h("div", { className: "flex items-center gap-2" });
+  const dotClass = status === "running" ? "bg-emerald-400 pulse-dot" : "bg-zinc-600";
+  statusGroup.appendChild(h("div", { className: `w-2 h-2 rounded-full ${dotClass}` }));
+  statusGroup.appendChild(StatusBadge(status));
+  headerLeft.appendChild(statusGroup);
+  headerInner.appendChild(headerLeft);
+
+  // Right: mode toggle + tabs
+  const headerRight = h("div", { className: "flex items-center gap-3 flex-wrap" });
+  headerRight.appendChild(ModeToggle());
+
+  const tabBar = h("div", { className: "flex rounded-lg overflow-hidden border border-zinc-800" });
+  for (const tab of ["dashboard", "architecture"]) {
+    tabBar.appendChild(h("button", {
+      className: `px-3 py-1.5 text-xs uppercase tracking-wider transition-colors ${
+        state.activeTab === tab ? "bg-zinc-800 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
+      }`,
+      onClick: () => { state.activeTab = tab; render(); }
+    }, tab));
+  }
+  headerRight.appendChild(tabBar);
+  headerInner.appendChild(headerRight);
+  headerBar.appendChild(headerInner);
+  app.appendChild(headerBar);
+
+  // Content
+  const contentWrap = h("div", { className: "max-w-7xl mx-auto px-4 py-4 space-y-4" });
+
+  // Error banner
+  if (state.error) {
+    contentWrap.appendChild(h("div", {
+      className: "bg-red-950/50 border border-red-900/50 rounded-lg p-3 text-xs text-red-400"
+    }, state.error));
+  }
+
+  if (state.activeTab === "dashboard") {
+    contentWrap.appendChild(MetricsStrip());
+
+    const grid = h("div", { className: "grid grid-cols-1 lg:grid-cols-3 gap-4" });
+
+    // Left column: TaskPlan + GitTimeline + EventLog
+    const leftCol = h("div", { className: "lg:col-span-1 space-y-4" });
+    leftCol.appendChild(TaskPlan());
+    leftCol.appendChild(GitTimeline());
+    leftCol.appendChild(EventLog());
+    grid.appendChild(leftCol);
+
+    // Right column: HandoffViewer + KnowledgeIndex
+    const rightCol = h("div", { className: "lg:col-span-2 space-y-4" });
+    rightCol.appendChild(HandoffViewer());
+    rightCol.appendChild(KnowledgeIndex());
+    grid.appendChild(rightCol);
+
+    contentWrap.appendChild(grid);
+  } else {
+    contentWrap.appendChild(ArchDiagram());
+  }
+
+  // Footer
+  const footer = h("div", { className: "border-t border-zinc-800 pt-3 pb-6 flex items-center justify-between text-xs text-zinc-600 flex-wrap gap-2" });
+  footer.appendChild(h("div", {},
+    `Handoff-first orchestration \u2022 Plan + Handoff + ${mode === "handoff-only" ? "no compaction" : "Knowledge Index"}`
+  ));
+  footer.appendChild(h("div", {},
+    `Polling state.json every 3s \u2022 ${mode === "handoff-plus-index" ? "Compaction every 5 coding iterations" : "No compaction overhead"}`
+  ));
+  contentWrap.appendChild(footer);
+
+  app.appendChild(contentWrap);
+}
+
+// --- Init ---
+function init() {
+  // Initial render with defaults
+  render();
+  // Start polling immediately
+  pollData();
+  // Poll every 3 seconds
+  setInterval(pollData, 3000);
+}
+
+// Detect protocol — warn if file://
+if (window.location.protocol === "file:") {
+  document.getElementById("app").innerHTML = `
+    <div style="padding: 40px; font-family: monospace; color: #a1a1aa; max-width: 600px; margin: 0 auto;">
+      <h1 style="color: #60a5fa; font-size: 18px; margin-bottom: 16px;">Ralph Deluxe Dashboard</h1>
+      <p style="color: #ef4444; margin-bottom: 12px;">Cannot poll files via file:// protocol.</p>
+      <p style="margin-bottom: 12px;">Serve the project root with a local HTTP server:</p>
+      <pre style="background: #18181b; padding: 12px; border-radius: 6px; border: 1px solid #27272a; color: #e4e4e7;">cd ${window.location.pathname.replace("/.ralph/dashboard.html", "") || "your-project-root"}
+python3 -m http.server 8080</pre>
+      <p style="margin-top: 12px;">Then open: <a href="http://localhost:8080/.ralph/dashboard.html" style="color: #60a5fa;">http://localhost:8080/.ralph/dashboard.html</a></p>
+    </div>
+  `;
+} else {
+  init();
+}
+</script>
+</body>
+</html>

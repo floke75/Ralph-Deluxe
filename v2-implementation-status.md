@@ -57,26 +57,41 @@
 
 ---
 
-## PR 4: Telemetry Module — NOT STARTED
+## PR 4: Telemetry Module — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| `.ralph/lib/telemetry.sh` | New module | Not done |
-| `.ralph/telemetry/events.jsonl` | Append-only event stream | Not done |
-| `.ralph/control/commands.json` | Dashboard-to-orchestrator commands | Not done |
-| `emit_event()` calls in `ralph.sh` | iteration_start, coding_complete, validation_result | Not done |
-| Pause/resume check in main loop | `while is_paused` | Not done |
-| Inject note check in main loop | Read from commands.json | Not done |
-| `tests/telemetry.bats` | New test file | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| `.ralph/lib/telemetry.sh` | New module | Done | 160 lines: emit_event, control commands, pause/resume |
+| `.ralph/logs/events.jsonl` | Append-only event stream | Done | Location changed from .ralph/telemetry/ to .ralph/logs/ |
+| `.ralph/control/commands.json` | Dashboard-to-orchestrator commands | Done | Queue-based `{pending: [...]}` format (not flat key-value) |
+| `emit_event()` calls in `ralph.sh` | iteration_start, coding_complete, validation_result | Done | Guards with `declare -f` for graceful degradation |
+| Pause/resume check in main loop | `while is_paused` | Done | `check_and_handle_commands` at top of each iteration |
+| Inject note check in main loop | Read from commands.json | Done | Processed via `process_control_commands` |
+| `tests/telemetry.bats` | New test file | Done | 32 tests, all pass |
+
+**Completion: 100%** — 32 telemetry tests pass. Queue-based control model replaces planned key-value format.
 
 ---
 
-## PR 5: Dashboard (Read-Only Views) — NOT STARTED
+## PR 5: Dashboard (Read-Only Views) — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| `.ralph/dashboard.html` | Single-file Tailwind dashboard | Not done |
-| React prototype (`ralph-deluxe-v2.jsx`) | Reference for porting | Exists in repo |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| `.ralph/dashboard.html` | Single-file Tailwind dashboard | Done | Vanilla JS + Tailwind CDN, all panels from prototype |
+| React prototype (`ralph-deluxe-v2.jsx`) | Reference for porting | Done | Fully ported to vanilla JS |
+| StatusBadge component | Colored status pills | Done | All states: done, in_progress, pending, failed, running, idle, paused, completed |
+| ModeToggle component | Handoff-only / handoff+index toggle | Done | Read-only display, mirrors orchestrator mode |
+| MetricsStrip component | 8 metric cards | Done | Computed from events.jsonl + handoffs + state.json |
+| TaskPlan component | Task list with status badges | Done | Current-task highlight, completion counter |
+| HandoffViewer component | Tabbed handoff display | Done | Summary, freeform, deviations, constraints, architecture, files touched |
+| KnowledgeIndex component | Table view | Done | Disabled message in handoff-only mode |
+| GitTimeline component | Visual dot timeline | Done | Pass/fail/running states from handoffs |
+| ArchDiagram component | ASCII architecture diagrams | Done | Both modes |
+| EventLog component | Live event stream | Done | Last 50 events, newest first, color-coded by type |
+| Data polling | 3-second interval | Done | state.json, plan.json, handoffs/*.json, knowledge-index.json, events.jsonl |
+| file:// detection | Warn user to use HTTP server | Done | Shows `python3 -m http.server` instructions |
+
+**Completion: 100%** — Single-file dashboard with all panels from the React prototype. Serve via `python3 -m http.server` from project root.
 
 ---
 
@@ -110,7 +125,7 @@
 | PR 1 | Handoff narrative fields | ~95% done |
 | PR 2 | Mode selection | Implemented |
 | PR 3 | Knowledge indexer | Implemented |
-| PR 4 | Telemetry module | Not started |
-| PR 5 | Dashboard (read-only) | Not started |
+| PR 4 | Telemetry module | Implemented |
+| PR 5 | Dashboard (read-only) | Implemented |
 | PR 6 | Control plane | Not started |
 | PR 7 | Documentation | Not started |
