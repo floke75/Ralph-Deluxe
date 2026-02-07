@@ -383,7 +383,9 @@ verify_json_append_only() {
         . as $new |
         ($new | type == "array") and
         ($new | length >= ($old | length)) and
-        all($old[]; . as $o | any($new[]; . == $o))
+        all($new[]; (.iteration | type == "number")) and
+        (([$new[].iteration] | length) == ([$new[].iteration] | unique | length)) and
+        all($old[]; . as $o | any($new[]; .iteration == $o.iteration and . == $o))
         ' "$knowledge_index_json" >/dev/null || return 1
 }
 
@@ -446,6 +448,7 @@ verify_knowledge_index() {
 
     return 0
 }
+
 
 # update_compaction_state — Reset counters in state.json after compaction
 update_compaction_state() {

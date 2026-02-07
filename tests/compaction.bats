@@ -510,6 +510,7 @@ EOF
     [[ "$output" == *"supersedes references to unknown memory_ids"* ]]
 }
 
+
 @test "run_knowledge_indexer succeeds when verification invariants pass" {
     run_memory_iteration() {
         cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
@@ -653,6 +654,4 @@ EOF
     [[ "$output" == *"Knowledge index verification failed"* ]]
     [[ "$(jq length "$RALPH_DIR/knowledge-index.json")" -eq 2 ]]
     [[ "$(jq -r '.[0].iteration' "$RALPH_DIR/knowledge-index.json")" -eq 1 ]]
-}
-
 }
