@@ -396,6 +396,9 @@ shutdown_handler() {
     fi
     SHUTTING_DOWN=true
     log "warn" "Received shutdown signal, saving state and exiting"
+    if declare -f emit_event >/dev/null 2>&1; then
+        emit_event "orchestrator_end" "Shutdown signal received" '{"reason":"signal"}' || true
+    fi
     write_state "status" "interrupted"
     log "info" "State saved. Exiting gracefully."
     exit 130
@@ -446,6 +449,16 @@ main() {
     # Source library modules (after config, before loop)
     source_libs
 
+    # Initialize telemetry control file and emit start event
+    if declare -f init_control_file >/dev/null 2>&1; then
+        init_control_file
+    fi
+    if declare -f emit_event >/dev/null 2>&1; then
+        emit_event "orchestrator_start" "Ralph Deluxe starting" \
+            "$(jq -cn --arg mode "$MODE" --argjson dry_run "$DRY_RUN" --argjson resume "$RESUME" \
+            '{mode: $mode, dry_run: $dry_run, resume: $resume}')"
+    fi
+
     # Ensure clean git state before starting
     if [[ "$DRY_RUN" == "false" ]]; then
         ensure_clean_state
@@ -457,6 +470,11 @@ main() {
         # Check for shutdown signal
         if [[ "$SHUTTING_DOWN" == "true" ]]; then
             break
+        fi
+
+        # Process operator control commands (pause/resume/inject-note)
+        if declare -f check_and_handle_commands >/dev/null 2>&1; then
+            check_and_handle_commands
         fi
 
         # Check if plan is complete
@@ -487,6 +505,13 @@ main() {
         log "info" "=========================================="
         log "info" "Iteration $current_iteration: $task_id — $task_title"
         log "info" "=========================================="
+
+        # Emit iteration start event
+        if declare -f emit_event >/dev/null 2>&1; then
+            emit_event "iteration_start" "Starting iteration $current_iteration" \
+                "$(jq -cn --arg task_id "$task_id" --arg title "$task_title" --argjson iter "$current_iteration" \
+                '{iteration: $iter, task_id: $task_id, task_title: $title}')"
+        fi
 
         # === DRY RUN MODE ===
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -543,6 +568,11 @@ main() {
                 log "error" "Task $task_id exceeded max retries ($max_retries)"
                 set_task_status "$PLAN_FILE" "$task_id" "failed"
             fi
+            if declare -f emit_event >/dev/null 2>&1; then
+                emit_event "iteration_end" "Coding cycle failed for $task_id" \
+                    "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "coding_failed" \
+                    '{iteration: $iter, task_id: $task_id, result: $result}')"
+            fi
             log "info" "=== End iteration $current_iteration (coding failed) ==="
             continue
         fi
@@ -550,6 +580,11 @@ main() {
         # Step 5: Run validation gate
         if run_validation "$current_iteration"; then
             log "info" "Validation PASSED for iteration $current_iteration"
+            if declare -f emit_event >/dev/null 2>&1; then
+                emit_event "validation_pass" "Validation passed for iteration $current_iteration" \
+                    "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" \
+                    '{iteration: $iter, task_id: $task_id}')"
+            fi
 
             # Step 6a: Commit successful iteration
             commit_iteration "$current_iteration" "$task_id" "passed validation"
@@ -563,8 +598,18 @@ main() {
             fi
 
             log "info" "Remaining tasks: $(count_remaining_tasks "$PLAN_FILE")"
+            if declare -f emit_event >/dev/null 2>&1; then
+                emit_event "iteration_end" "Iteration $current_iteration completed successfully" \
+                    "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "success" \
+                    '{iteration: $iter, task_id: $task_id, result: $result}')"
+            fi
         else
             log "warn" "Validation FAILED for iteration $current_iteration"
+            if declare -f emit_event >/dev/null 2>&1; then
+                emit_event "validation_fail" "Validation failed for iteration $current_iteration" \
+                    "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" \
+                    '{iteration: $iter, task_id: $task_id}')"
+            fi
 
             # Step 6b: Rollback on validation failure
             rollback_to_checkpoint "$checkpoint"
@@ -595,6 +640,11 @@ main() {
                     log "info" "Failure context saved for retry"
                 fi
             fi
+            if declare -f emit_event >/dev/null 2>&1; then
+                emit_event "iteration_end" "Iteration $current_iteration ended (validation failed)" \
+                    "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "validation_failed" \
+                    '{iteration: $iter, task_id: $task_id, result: $result}')"
+            fi
         fi
 
         log "info" "=== End iteration $current_iteration ==="
@@ -610,6 +660,15 @@ main() {
     if (( current_iteration >= MAX_ITERATIONS )); then
         log "warn" "Reached max iterations ($MAX_ITERATIONS)"
         write_state "status" "max_iterations_reached"
+    fi
+
+    # Emit orchestrator end event
+    if declare -f emit_event >/dev/null 2>&1; then
+        local final_status
+        final_status="$(read_state "status" 2>/dev/null || echo "unknown")"
+        emit_event "orchestrator_end" "Ralph Deluxe finished" \
+            "$(jq -cn --arg status "$final_status" --argjson iter "$current_iteration" \
+            '{status: $status, iterations_completed: $iter}')" || true
     fi
 
     log "info" "Ralph Deluxe finished ($(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?") tasks remaining)"
