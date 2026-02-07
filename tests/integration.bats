@@ -421,6 +421,64 @@ EOF
 
     run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-only --plan "$TEST_DIR/plan.json"
     [[ "$status" -eq 0 ]]
-    # Should NOT contain "Compaction would be triggered"
-    [[ "$output" != *"Compaction would be triggered"* ]]
+    # Should NOT contain knowledge indexing trigger messages
+    [[ "$output" != *"Knowledge indexing would be triggered"* ]]
+    [[ "$output" != *"Knowledge indexing triggered"* ]]
+}
+
+@test "ralph.sh in handoff-plus-index mode triggers knowledge indexer when compaction thresholds met" {
+    cd "$TEST_DIR"
+
+    # Set state to trigger compaction (high iteration count)
+    cat > "$TEST_DIR/.ralph/state.json" <<'EOF'
+{
+  "current_iteration": 5,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 10,
+  "total_handoff_bytes_since_compaction": 100000,
+  "last_task_id": null,
+  "started_at": "2026-02-06T10:00:00Z",
+  "status": "idle",
+  "mode": "handoff-plus-index"
+}
+EOF
+
+    # Create handoff files so build_compaction_input has data to process
+    cp "$PROJ_ROOT/tests/fixtures/sample-handoff.json" "$TEST_DIR/.ralph/handoffs/handoff-003.json"
+    cp "$PROJ_ROOT/tests/fixtures/sample-handoff-002.json" "$TEST_DIR/.ralph/handoffs/handoff-004.json"
+
+    # Copy memory-output-schema.json and mcp-memory.json (needed by run_memory_iteration)
+    cp "$PROJ_ROOT/.ralph/config/memory-output-schema.json" "$TEST_DIR/.ralph/config/" 2>/dev/null || true
+    cp "$PROJ_ROOT/.ralph/config/mcp-memory.json" "$TEST_DIR/.ralph/config/" 2>/dev/null || true
+
+    git add -A && git commit --quiet -m "high compaction state with handoffs"
+
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-plus-index --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+    # Should contain the knowledge indexing trigger message
+    [[ "$output" == *"Knowledge indexing would be triggered"* ]]
+}
+
+@test "ralph.sh in handoff-plus-index mode does not trigger indexer when below thresholds" {
+    cd "$TEST_DIR"
+
+    # Set state below all thresholds
+    cat > "$TEST_DIR/.ralph/state.json" <<'EOF'
+{
+  "current_iteration": 2,
+  "last_compaction_iteration": 1,
+  "coding_iterations_since_compaction": 1,
+  "total_handoff_bytes_since_compaction": 500,
+  "last_task_id": null,
+  "started_at": "2026-02-06T10:00:00Z",
+  "status": "idle",
+  "mode": "handoff-plus-index"
+}
+EOF
+    git add -A && git commit --quiet -m "low compaction state"
+
+    run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --mode handoff-plus-index --plan "$TEST_DIR/plan.json"
+    [[ "$status" -eq 0 ]]
+    # Should NOT contain knowledge indexing trigger
+    [[ "$output" != *"Knowledge indexing would be triggered"* ]]
 }

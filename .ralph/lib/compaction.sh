@@ -99,6 +99,71 @@ build_compaction_input() {
     echo "$combined"
 }
 
+# build_indexer_prompt — Assemble prompt for the knowledge indexer from template + handoff data
+# Args: $1 = compaction input (handoff L2 data)
+# Uses globals: RALPH_DIR
+# Stdout: assembled prompt string
+build_indexer_prompt() {
+    local compaction_input="$1"
+    local template="${RALPH_DIR:-.ralph}/templates/knowledge-index-prompt.md"
+    local knowledge_index="${RALPH_DIR:-.ralph}/knowledge-index.md"
+
+    local prompt=""
+    if [[ -f "$template" ]]; then
+        prompt="$(cat "$template")"$'\n\n'
+    fi
+
+    # Include existing knowledge index for incremental update
+    if [[ -f "$knowledge_index" ]]; then
+        prompt+="## Existing Knowledge Index"$'\n'
+        prompt+="$(cat "$knowledge_index")"$'\n\n'
+    fi
+
+    prompt+="## Recent Handoff Data"$'\n'
+    prompt+="$compaction_input"
+
+    echo "$prompt"
+}
+
+# run_knowledge_indexer — Reads recent handoffs, updates knowledge-index.md and knowledge-index.json
+# This replaces run_compaction_cycle when in handoff-plus-index mode.
+# The indexer runs a Claude iteration that writes the knowledge index files via built-in tools.
+# Args: $1 = task JSON (optional, for context)
+# Uses globals: RALPH_DIR, STATE_FILE, DRY_RUN
+# Returns: 0 on success, 1 on failure
+run_knowledge_indexer() {
+    local task_json="${1:-}"
+    local handoffs_dir="${RALPH_DIR:-.ralph}/handoffs"
+    local state_file="${STATE_FILE:-.ralph/state.json}"
+
+    log "info" "--- Knowledge indexer start ---"
+
+    local compaction_input
+    compaction_input="$(build_compaction_input "$handoffs_dir" "$state_file")"
+
+    if [[ -z "$compaction_input" ]]; then
+        log "info" "No new handoffs to index, skipping"
+        return 0
+    fi
+
+    local indexer_prompt
+    indexer_prompt="$(build_indexer_prompt "$compaction_input")"
+
+    # Run the indexer iteration via Claude CLI.
+    # In real mode, Claude writes knowledge-index.md and knowledge-index.json via built-in tools.
+    # In dry-run mode, run_memory_iteration returns a mock response.
+    local raw_response
+    if ! raw_response="$(run_memory_iteration "$indexer_prompt")"; then
+        log "error" "Knowledge indexer failed"
+        return 1
+    fi
+
+    # Update compaction state counters
+    update_compaction_state "$state_file"
+
+    log "info" "--- Knowledge indexer end ---"
+}
+
 # update_compaction_state — Reset counters in state.json after compaction
 update_compaction_state() {
     local state_file="${1:-.ralph/state.json}"

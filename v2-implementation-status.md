@@ -24,31 +24,36 @@
 
 ---
 
-## PR 2: Mode Selection — NOT STARTED
+## PR 2: Mode Selection — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| `--mode` flag in `parse_args()` | Add CLI argument | Not done |
-| `MODE` variable in `ralph.sh` | Default from `RALPH_MODE` env | Not done |
-| `RALPH_MODE` in `ralph.conf` | Add config setting | Not done |
-| `mode` field in `state.json` | Track current mode | Not done |
-| `build_coding_prompt_v2()` in `context.sh` | Mode-aware prompt assembly | Not done |
-| Skip compaction in handoff-only mode | Conditional in main loop | Not done |
-| Integration tests for mode flag | Update `integration.bats` | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| `--mode` flag in `parse_args()` | Add CLI argument | Done | Supports handoff-only and handoff-plus-index |
+| `MODE` variable in `ralph.sh` | Default from `RALPH_MODE` env | Done | Priority: CLI > config > default |
+| `RALPH_MODE` in `ralph.conf` | Add config setting | Done | Default: handoff-only |
+| `mode` field in `state.json` | Track current mode | Done | Persisted each run |
+| `build_coding_prompt_v2()` in `context.sh` | Mode-aware prompt assembly | Done | Handoff-first with knowledge index pointer |
+| Skip compaction in handoff-only mode | Conditional in main loop | Done | Both dry-run and real paths |
+| Integration tests for mode flag | Update `integration.bats` | Done | 6 new tests (mode flag, config, override, compaction skip) |
+
+**Completion: 100%** — 36 context tests pass, 16 integration tests pass.
 
 ---
 
-## PR 3: Knowledge Indexer — NOT STARTED
+## PR 3: Knowledge Indexer — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| `run_knowledge_indexer()` in `compaction.sh` | New function | Not done |
-| `build_indexer_prompt()` in `compaction.sh` | New function | Not done |
-| `templates/indexer-prompt.md` | New template | Not done |
-| `.ralph/knowledge-index.json` | Dashboard table data | Not done |
-| `.ralph/knowledge-index.md` | LLM-readable categories | Not done |
-| Knowledge indexer call in `ralph.sh` | Conditional on mode | Not done |
-| Tests in `compaction.bats` | Update existing tests | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| `run_knowledge_indexer()` in `compaction.sh` | New function | Done | Reads handoffs, runs indexer iteration, updates state |
+| `build_indexer_prompt()` in `compaction.sh` | New function | Done | Template + existing index + handoff data |
+| `templates/knowledge-index-prompt.md` | New template | Done | Instructions for both .md and .json outputs |
+| `.ralph/knowledge-index.json` | Dashboard table data | Done | Written by Claude during indexer iteration |
+| `.ralph/knowledge-index.md` | LLM-readable categories | Done | Written by Claude during indexer iteration |
+| Knowledge indexer call in `ralph.sh` | Conditional on mode | Done | Both dry-run and real paths use `run_knowledge_indexer` |
+| Tests in `compaction.bats` | New tests for indexer | Done | 9 new tests (build_indexer_prompt + run_knowledge_indexer) |
+| Integration tests in `integration.bats` | New tests for indexer triggering | Done | 2 new tests (triggers in h+i mode, skips below threshold) |
+
+**Completion: 100%** — 34 compaction tests pass (25 original + 9 new), 18 integration tests pass (16 original + 2 new).
 
 ---
 
@@ -103,8 +108,8 @@
 | PR | Description | Status |
 |----|-------------|--------|
 | PR 1 | Handoff narrative fields | ~95% done |
-| PR 2 | Mode selection | Not started |
-| PR 3 | Knowledge indexer | Not started |
+| PR 2 | Mode selection | Implemented |
+| PR 3 | Knowledge indexer | Implemented |
 | PR 4 | Telemetry module | Not started |
 | PR 5 | Dashboard (read-only) | Not started |
 | PR 6 | Control plane | Not started |
