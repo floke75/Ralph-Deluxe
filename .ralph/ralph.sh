@@ -495,8 +495,8 @@ main() {
             # Still run compaction check in dry-run to test triggers (handoff-plus-index only)
             if [[ "$MODE" == "handoff-plus-index" ]]; then
                 if check_compaction_trigger "$STATE_FILE" "$task_json" 2>/dev/null; then
-                    log "info" "[DRY RUN] Compaction would be triggered"
-                    run_compaction_cycle "$task_json" || true
+                    log "info" "[DRY RUN] Knowledge indexing would be triggered"
+                    run_knowledge_indexer "$task_json" || true
                 fi
             fi
 
@@ -513,9 +513,9 @@ main() {
         # Step 1: Check if knowledge indexing is due (handoff-plus-index mode only)
         if [[ "$MODE" == "handoff-plus-index" ]]; then
             if check_compaction_trigger "$STATE_FILE" "$task_json"; then
-                log "info" "Compaction triggered, running memory iteration"
-                run_compaction_cycle "$task_json" || {
-                    log "warn" "Compaction failed, continuing without updated context"
+                log "info" "Knowledge indexing triggered"
+                run_knowledge_indexer "$task_json" || {
+                    log "warn" "Knowledge indexing failed, continuing"
                 }
             fi
         fi

@@ -17,6 +17,18 @@ setup() {
     cp "$TEST_DIR/fixtures/sample-handoff.json" "$TEST_DIR/handoffs/handoff-003.json"
     cp "$TEST_DIR/fixtures/sample-handoff-002.json" "$TEST_DIR/handoffs/handoff-004.json"
 
+    # Create .ralph structure for knowledge indexer tests
+    export RALPH_DIR="$TEST_DIR/.ralph"
+    mkdir -p "$RALPH_DIR/handoffs"
+    mkdir -p "$RALPH_DIR/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$RALPH_DIR/handoffs/"
+    cp "$TEST_DIR/handoffs/handoff-004.json" "$RALPH_DIR/handoffs/"
+    cp "$PROJ_ROOT/.ralph/templates/knowledge-index-prompt.md" "$RALPH_DIR/templates/"
+
+    # Create state file for knowledge indexer tests
+    export STATE_FILE="$RALPH_DIR/state.json"
+    cp "$TEST_DIR/fixtures/sample-state.json" "$STATE_FILE"
+
     # Source the module under test
     source "$PROJ_ROOT/.ralph/lib/compaction.sh"
 }
@@ -250,4 +262,145 @@ EOF
     local task_id
     task_id=$(jq -r '.last_task_id' "$state_file")
     [[ "$task_id" == "TASK-004" ]]
+}
+
+# --- build_indexer_prompt ---
+
+@test "build_indexer_prompt includes template content when template exists" {
+    local compaction_input="--- Iteration 3 ---"$'\n'"test data"
+    run build_indexer_prompt "$compaction_input"
+    [[ "$status" -eq 0 ]]
+    # Template should contain the Knowledge Indexer header
+    [[ "$output" == *"Knowledge Indexer"* ]]
+    [[ "$output" == *"knowledge-index.md"* ]]
+    [[ "$output" == *"knowledge-index.json"* ]]
+}
+
+@test "build_indexer_prompt includes compaction input data" {
+    local compaction_input="--- Iteration 3 ---"$'\n'"TASK-003 test data"
+    run build_indexer_prompt "$compaction_input"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Recent Handoff Data"* ]]
+    [[ "$output" == *"TASK-003 test data"* ]]
+}
+
+@test "build_indexer_prompt includes existing knowledge index when present" {
+    # Create an existing knowledge index
+    cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 2
+
+## Constraints
+- Some existing constraint [iter 2]
+EOF
+
+    local compaction_input="--- Iteration 3 ---"$'\n'"new data"
+    run build_indexer_prompt "$compaction_input"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Existing Knowledge Index"* ]]
+    [[ "$output" == *"Some existing constraint"* ]]
+}
+
+@test "build_indexer_prompt works without existing knowledge index" {
+    # Ensure no knowledge-index.md exists
+    rm -f "$RALPH_DIR/knowledge-index.md"
+
+    local compaction_input="--- Iteration 3 ---"$'\n'"data"
+    run build_indexer_prompt "$compaction_input"
+    [[ "$status" -eq 0 ]]
+    # Should not contain existing knowledge index section
+    [[ "$output" != *"## Existing Knowledge Index"* ]]
+    # Should still contain the handoff data
+    [[ "$output" == *"## Recent Handoff Data"* ]]
+}
+
+@test "build_indexer_prompt works without template file" {
+    rm -f "$RALPH_DIR/templates/knowledge-index-prompt.md"
+
+    local compaction_input="--- Iteration 3 ---"$'\n'"data"
+    run build_indexer_prompt "$compaction_input"
+    [[ "$status" -eq 0 ]]
+    # Should still contain the handoff data section
+    [[ "$output" == *"## Recent Handoff Data"* ]]
+    [[ "$output" == *"data"* ]]
+}
+
+# --- run_knowledge_indexer ---
+
+@test "run_knowledge_indexer returns 0 when no handoffs to index" {
+    # Set last_compaction_iteration to 10 so all handoffs are excluded
+    local state_file="$RALPH_DIR/state.json"
+    cat > "$state_file" <<'EOF'
+{
+  "current_iteration": 10,
+  "last_compaction_iteration": 10,
+  "coding_iterations_since_compaction": 0,
+  "total_handoff_bytes_since_compaction": 0,
+  "last_task_id": "TASK-005",
+  "started_at": "2026-02-06T10:00:00Z",
+  "status": "running"
+}
+EOF
+
+    # Mock run_memory_iteration to verify it's NOT called
+    run_memory_iteration() { echo "SHOULD NOT BE CALLED"; return 1; }
+    export -f run_memory_iteration
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"No new handoffs to index"* ]]
+}
+
+@test "run_knowledge_indexer calls run_memory_iteration with indexer prompt" {
+    # Mock run_memory_iteration to capture its input
+    run_memory_iteration() {
+        local prompt="$1"
+        if [[ "$prompt" == *"Recent Handoff Data"* && "$prompt" == *"TASK-003"* ]]; then
+            echo '{"type":"result","subtype":"success","result":"{}"}'
+            return 0
+        fi
+        echo "unexpected prompt"
+        return 1
+    }
+    export -f run_memory_iteration
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Knowledge indexer start"* ]]
+    [[ "$output" == *"Knowledge indexer end"* ]]
+}
+
+@test "run_knowledge_indexer updates compaction state on success" {
+    # Mock run_memory_iteration
+    run_memory_iteration() {
+        echo '{"type":"result","subtype":"success","result":"{}"}'
+        return 0
+    }
+    export -f run_memory_iteration
+
+    # Verify state before
+    local iters_before
+    iters_before=$(jq -r '.coding_iterations_since_compaction' "$STATE_FILE")
+    [[ "$iters_before" -eq 5 ]]
+
+    run_knowledge_indexer ""
+
+    # Verify state was reset
+    local iters_after
+    iters_after=$(jq -r '.coding_iterations_since_compaction' "$STATE_FILE")
+    [[ "$iters_after" -eq 0 ]]
+
+    local bytes_after
+    bytes_after=$(jq -r '.total_handoff_bytes_since_compaction' "$STATE_FILE")
+    [[ "$bytes_after" -eq 0 ]]
+}
+
+@test "run_knowledge_indexer returns 1 when memory iteration fails" {
+    # Mock run_memory_iteration to fail
+    run_memory_iteration() { return 1; }
+    export -f run_memory_iteration
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"Knowledge indexer failed"* ]]
 }
