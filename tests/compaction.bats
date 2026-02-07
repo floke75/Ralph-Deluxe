@@ -356,6 +356,23 @@ EOF
     run_memory_iteration() {
         local prompt="$1"
         if [[ "$prompt" == *"Recent Handoff Data"* && "$prompt" == *"TASK-003"* ]]; then
+            cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 4 (2026-02-06T10:00:00Z)
+
+## Constraints
+- Must keep handoff references stable [iter 4]
+EOF
+            cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 4,
+    "task": "TASK-004",
+    "summary": "Indexed handoff updates",
+    "tags": ["knowledge-index"]
+  }
+]
+EOF
             echo '{"type":"result","subtype":"success","result":"{}"}'
             return 0
         fi
@@ -373,6 +390,23 @@ EOF
 @test "run_knowledge_indexer updates compaction state on success" {
     # Mock run_memory_iteration
     run_memory_iteration() {
+        cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 4 (2026-02-06T10:00:00Z)
+
+## Constraints
+- Must preserve state counters [iter 4]
+EOF
+        cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 4,
+    "task": "TASK-004",
+    "summary": "Compaction state reset validated",
+    "tags": ["state"]
+  }
+]
+EOF
         echo '{"type":"result","subtype":"success","result":"{}"}'
         return 0
     }
@@ -403,4 +437,149 @@ EOF
     run run_knowledge_indexer ""
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"Knowledge indexer failed"* ]]
+}
+
+@test "run_knowledge_indexer succeeds when verification invariants pass" {
+    run_memory_iteration() {
+        cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 4 (2026-02-06T10:00:00Z)
+
+## Constraints
+- Must retain audit trail [iter 2]
+EOF
+        cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 2,
+    "task": "TASK-002",
+    "summary": "Initial index entry",
+    "tags": ["baseline"]
+  },
+  {
+    "iteration": 4,
+    "task": "TASK-004",
+    "summary": "Newly indexed work",
+    "tags": ["incremental"]
+  }
+]
+EOF
+        return 0
+    }
+    export -f run_memory_iteration
+
+    # Seed existing indexes so append-only and constraint checks apply.
+    cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 2 (2026-02-05T08:00:00Z)
+
+## Constraints
+- Must retain audit trail [iter 2]
+EOF
+    cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 2,
+    "task": "TASK-002",
+    "summary": "Initial index entry",
+    "tags": ["baseline"]
+  }
+]
+EOF
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Knowledge indexer end"* ]]
+}
+
+@test "run_knowledge_indexer restores backups when verification fails" {
+    run_memory_iteration() {
+        cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Broken Header
+Last updated: bad
+EOF
+        cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[]
+EOF
+        return 0
+    }
+    export -f run_memory_iteration
+
+    cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 2 (2026-02-05T08:00:00Z)
+
+## Constraints
+- Must not delete migration scripts [iter 2]
+EOF
+    cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 2,
+    "task": "TASK-002",
+    "summary": "Original entry",
+    "tags": ["baseline"]
+  }
+]
+EOF
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"Knowledge index verification failed"* ]]
+    [[ "$(cat "$RALPH_DIR/knowledge-index.md")" == *"Must not delete migration scripts"* ]]
+    [[ "$(jq length "$RALPH_DIR/knowledge-index.json")" -eq 1 ]]
+}
+
+@test "run_knowledge_indexer rejects deletion of prior json iterations" {
+    run_memory_iteration() {
+        cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 4 (2026-02-06T10:00:00Z)
+
+## Constraints
+- Must keep deployment scripts [iter 1]
+EOF
+        cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 4,
+    "task": "TASK-004",
+    "summary": "Only latest entry kept",
+    "tags": ["bad-update"]
+  }
+]
+EOF
+        return 0
+    }
+    export -f run_memory_iteration
+
+    cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 1 (2026-02-04T08:00:00Z)
+
+## Constraints
+- Must keep deployment scripts [iter 1]
+EOF
+    cat > "$RALPH_DIR/knowledge-index.json" <<'EOF'
+[
+  {
+    "iteration": 1,
+    "task": "TASK-001",
+    "summary": "Foundational setup",
+    "tags": ["bootstrap"]
+  },
+  {
+    "iteration": 2,
+    "task": "TASK-002",
+    "summary": "Second iteration",
+    "tags": ["baseline"]
+  }
+]
+EOF
+
+    run run_knowledge_indexer ""
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"Knowledge index verification failed"* ]]
+    [[ "$(jq length "$RALPH_DIR/knowledge-index.json")" -eq 2 ]]
+    [[ "$(jq -r '.[0].iteration' "$RALPH_DIR/knowledge-index.json")" -eq 1 ]]
 }
