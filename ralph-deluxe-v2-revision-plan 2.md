@@ -402,7 +402,7 @@ The existing `format_compacted_context()` function in `context.sh` continues to 
 
 ```
 .ralph/
-├── telemetry/
+├── logs/
 │   └── events.jsonl             # NEW: append-only event stream
 ├── control/
 │   └── commands.json            # NEW: dashboard → orchestrator commands
@@ -411,132 +411,170 @@ The existing `format_compacted_context()` function in `context.sh` continues to 
 └── dashboard.html               # NEW: single-file dashboard
 ```
 
+> **Implementation note:** The original plan placed events at `.ralph/telemetry/events.jsonl`. The actual implementation uses `.ralph/logs/events.jsonl` to keep all log artifacts in the existing `logs/` directory.
+
 ### New module: `.ralph/lib/telemetry.sh`
+
+> **Implementation note:** The API below reflects what was actually built in PR 4, which differs significantly from the original plan. The original plan used `emit_event(type, key=val...)`, `is_paused()`, `read_control_commands()`, and `clear_control_field()`. The actual implementation uses a queue-based command model and a different `emit_event` signature.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-TELEMETRY_FILE="${RALPH_DIR:-.ralph}/telemetry/events.jsonl"
-CONTROL_FILE="${RALPH_DIR:-.ralph}/control/commands.json"
+RALPH_EVENTS_FILE="${RALPH_EVENTS_FILE:-.ralph/logs/events.jsonl}"
+RALPH_CONTROL_FILE="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
+RALPH_PAUSE_POLL_SECONDS="${RALPH_PAUSE_POLL_SECONDS:-5}"
 
+# emit_event — Append a single event to the JSONL stream
+# Args: $1 = event_type (string), $2 = message (string), $3 = metadata JSON (optional)
 emit_event() {
-    local event="$1"
-    shift
-    local ts
-    ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    local json
-    json=$(jq -n --arg ts "$ts" --arg event "$event" \
-        '{ts: $ts, event: $event}')
-    # Merge any additional key=value pairs
-    while [[ $# -gt 0 ]]; do
-        local key="${1%%=*}"
-        local val="${1#*=}"
-        json=$(echo "$json" | jq --arg k "$key" --arg v "$val" \
-            '. + {($k): ($v | try tonumber // .)}')
-        shift
-    done
-    mkdir -p "$(dirname "$TELEMETRY_FILE")"
-    echo "$json" >> "$TELEMETRY_FILE"
+    local event_type="$1"
+    local message="$2"
+    local metadata="${3:-"{}"}"
+    local timestamp
+    timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    mkdir -p "$(dirname "$RALPH_EVENTS_FILE")"
+    jq -cn \
+        --arg ts "$timestamp" \
+        --arg type "$event_type" \
+        --arg msg "$message" \
+        --argjson meta "$metadata" \
+        '{timestamp: $ts, event: $type, message: $msg, metadata: $meta}' \
+        >> "$RALPH_EVENTS_FILE"
 }
 
-# Read control commands, return current settings
-read_control_commands() {
-    if [[ ! -f "$CONTROL_FILE" ]]; then
-        echo '{}'
-        return
+# init_control_file — Create commands.json with empty pending array
+init_control_file() {
+    mkdir -p "$(dirname "$RALPH_CONTROL_FILE")"
+    if [[ ! -f "$RALPH_CONTROL_FILE" ]]; then
+        echo '{"pending":[]}' | jq . > "$RALPH_CONTROL_FILE"
     fi
-    cat "$CONTROL_FILE"
 }
 
-# Check if pause is requested
-is_paused() {
-    local cmd
-    cmd="$(read_control_commands)"
-    [[ "$(echo "$cmd" | jq -r '.pause // false')" == "true" ]]
+# read_pending_commands — Read the pending commands array
+read_pending_commands() {
+    if [[ -f "$RALPH_CONTROL_FILE" ]]; then
+        jq -c '.pending // []' "$RALPH_CONTROL_FILE"
+    else
+        echo '[]'
+    fi
 }
 
-# Clear a one-shot command (like inject_note)
-clear_control_field() {
-    local field="$1"
-    if [[ -f "$CONTROL_FILE" ]]; then
+# clear_pending_commands — Reset the pending array
+clear_pending_commands() {
+    if [[ -f "$RALPH_CONTROL_FILE" ]]; then
         local tmp
         tmp="$(mktemp)"
-        jq --arg f "$field" '.[$f] = null' "$CONTROL_FILE" > "$tmp"
-        mv "$tmp" "$CONTROL_FILE"
+        jq '.pending = []' "$RALPH_CONTROL_FILE" > "$tmp" && mv "$tmp" "$RALPH_CONTROL_FILE"
     fi
 }
+
+# process_control_commands — Read, execute, and clear pending commands
+# Handles: pause, resume, inject-note. Sets RALPH_PAUSED flag.
+process_control_commands() {
+    local commands
+    commands="$(read_pending_commands)"
+    local count
+    count="$(echo "$commands" | jq 'length')"
+    [[ "$count" -eq 0 ]] && return 0
+
+    local i=0
+    while [[ "$i" -lt "$count" ]]; do
+        local cmd_obj command
+        cmd_obj="$(echo "$commands" | jq -c ".[$i]")"
+        command="$(echo "$cmd_obj" | jq -r '.command')"
+        case "$command" in
+            pause)   RALPH_PAUSED=true;  emit_event "pause" "Operator requested pause" ;;
+            resume)  RALPH_PAUSED=false; emit_event "resume" "Operator requested resume" ;;
+            inject-note)
+                local note
+                note="$(echo "$cmd_obj" | jq -r '.note // "no note"')"
+                emit_event "note" "$note" ;;
+            *) log "warn" "Unknown control command: $command" ;;
+        esac
+        i=$((i + 1))
+    done
+    clear_pending_commands
+}
+
+# wait_while_paused — Block execution, polling for resume command
+wait_while_paused() {
+    while [[ "${RALPH_PAUSED:-false}" == "true" ]]; do
+        sleep "$RALPH_PAUSE_POLL_SECONDS"
+        process_control_commands
+    done
+}
+
+# check_and_handle_commands — Convenience wrapper for top of each iteration
+check_and_handle_commands() {
+    process_control_commands
+    if [[ "${RALPH_PAUSED:-false}" == "true" ]]; then
+        wait_while_paused
+    fi
+}
+
+RALPH_PAUSED="${RALPH_PAUSED:-false}"
 ```
 
 ### Modifications to `ralph.sh` main loop
 
-Add at the top of each iteration:
+All `emit_event` calls are guarded with `if declare -f emit_event >/dev/null 2>&1` so the orchestrator still works if `telemetry.sh` fails to load.
+
+At the top of each iteration:
 
 ```bash
+# Process control commands (pause/resume/inject-note)
+if declare -f check_and_handle_commands >/dev/null 2>&1; then
+    check_and_handle_commands
+fi
+
 # Emit iteration start event
-emit_event "iteration_start" \
-    "iteration=$current_iteration" \
-    "task_id=$task_id" \
-    "mode=$MODE"
-
-# Check dashboard control commands
-while is_paused; do
-    log "info" "Paused by dashboard. Waiting..."
-    sleep 5
-done
-
-# Check for mode override from dashboard
-local ctrl_mode
-ctrl_mode="$(read_control_commands | jq -r '.mode // empty')"
-if [[ -n "$ctrl_mode" && "$ctrl_mode" != "$MODE" ]]; then
-    log "info" "Mode changed via dashboard: $MODE → $ctrl_mode"
-    MODE="$ctrl_mode"
-fi
-
-# Check for injected human note
-local inject_note
-inject_note="$(read_control_commands | jq -r '.inject_note // empty')"
-if [[ -n "$inject_note" ]]; then
-    log "info" "Human note injected: $inject_note"
-    # Append to failure_context (reusing existing injection mechanism)
-    failure_context+=$'\n\n'"## Note from operator"$'\n'"$inject_note"
-    clear_control_field "inject_note"
+if declare -f emit_event >/dev/null 2>&1; then
+    emit_event "iteration_start" "Starting iteration $current_iteration" \
+        "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" \
+            '{task_id: $task_id, iteration: $iter}')"
 fi
 ```
 
-Add after coding cycle completes:
+After validation:
 
 ```bash
-emit_event "coding_complete" \
-    "iteration=$current_iteration" \
-    "duration_s=$((SECONDS - iter_start))" \
-    "turns=$(echo "$metadata" | jq -r '.num_turns')"
+# Separate events for pass vs. fail
+if declare -f emit_event >/dev/null 2>&1; then
+    emit_event "validation_pass" "Validation passed for iteration $current_iteration" \
+        "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" \
+            '{task_id: $task_id, iteration: $iter}')"
+fi
 ```
 
-Add after validation:
+At orchestrator end:
 
 ```bash
-emit_event "validation_result" \
-    "iteration=$current_iteration" \
-    "passed=$([[ $? -eq 0 ]] && echo true || echo false)"
+if declare -f emit_event >/dev/null 2>&1; then
+    emit_event "orchestrator_end" "Ralph Deluxe finished" \
+        "$(jq -cn --arg status "$final_status" --argjson iter "$current_iteration" \
+            '{status: $status, final_iteration: $iter}')"
+fi
 ```
 
 ### Control commands format: `.ralph/control/commands.json`
 
+> **Implementation note:** The original plan used a flat key-value format (`{"pause": false, "inject_note": null, ...}`). The actual implementation uses a **queue-based model** which is a better fit because commands are one-shot actions (not persistent state), ordering is preserved, and the dashboard can enqueue multiple commands between poll intervals without race conditions. **PR 6 must use this format.**
+
 ```json
 {
-  "pause": false,
-  "mode": "handoff-only",
-  "skip_tasks": [],
-  "inject_note": null,
-  "settings": {
-    "validation_strategy": "strict",
-    "knowledge_index_interval": 5,
-    "max_turns": 20,
-    "min_delay_seconds": 30
-  }
+  "pending": [
+    {"command": "pause"},
+    {"command": "resume"},
+    {"command": "inject-note", "note": "Check the flaky test before continuing"},
+    {"command": "skip-task", "task_id": "TASK-005"}
+  ]
 }
 ```
+
+The orchestrator calls `process_control_commands()` at the top of each iteration, which iterates the `pending` array, executes each command, and then clears the array via `clear_pending_commands()`. The clear uses a write-to-temp-then-rename pattern to avoid race conditions with dashboard writes.
+
+Currently handled commands: `pause`, `resume`, `inject-note`. PR 6 needs to add `skip-task` handling.
 
 ### Dashboard: `.ralph/dashboard.html`
 
@@ -553,11 +591,12 @@ A React prototype already exists (`ralph-deluxe-v2.jsx`) with mock data covering
 - Git timeline visualization
 - Architecture diagrams for both modes
 
-**Follow-up (not in prototype yet):**
-- Pause/resume toggle → writes `commands.json` `pause` field
-- Inject note text area → writes `commands.json` `inject_note` field
-- Skip task buttons → writes `commands.json` `skip_tasks` array
+**Follow-up (not in prototype yet — PR 6):**
+- Pause/resume toggle → enqueues `{"command": "pause"}` or `{"command": "resume"}` to `commands.json` pending array
+- Inject note text area → enqueues `{"command": "inject-note", "note": "..."}` to pending array
+- Skip task buttons → enqueues `{"command": "skip-task", "task_id": "..."}` to pending array (needs handler in `telemetry.sh`)
 - Settings panel (validation strategy, compaction interval, max turns, delay)
+- Requires a write mechanism (e.g., `.ralph/serve.py` — tiny Python HTTP server with POST endpoint) since browsers cannot write local files via fetch
 
 ---
 
@@ -598,13 +637,13 @@ These are changes to the existing codebase, sized for manageable PRs.
 
 ### PR 4: Telemetry module
 **Files changed:** `ralph.sh`
-**Files added:** `lib/telemetry.sh`, `telemetry/` dir, `control/commands.json`
+**Files added:** `lib/telemetry.sh`, `control/commands.json`
 **Tests:** Add `tests/telemetry.bats`
-- Add emit_event(), is_paused(), read_control_commands()
-- Wire events into ralph.sh main loop
-- Add pause/resume check at top of each iteration
-- Add inject_note check
-- Initialize control/commands.json with defaults
+- Add `emit_event(type, message, metadata_json)`, `init_control_file()`, `read_pending_commands()`, `clear_pending_commands()`, `process_control_commands()`, `wait_while_paused()`, `check_and_handle_commands()`
+- Wire events into `ralph.sh` main loop (all guarded with `declare -f` for graceful degradation)
+- Events file: `.ralph/logs/events.jsonl` (JSONL, schema: `{timestamp, event, message, metadata}`)
+- Queue-based control: `commands.json` uses `{"pending": [...]}` format, not flat key-value
+- `check_and_handle_commands()` at top of each iteration processes pending commands and blocks on pause
 
 ### PR 5: Dashboard (read-only views)
 **Files added:** `dashboard.html`
@@ -617,11 +656,14 @@ These are changes to the existing codebase, sized for manageable PRs.
 - Note: control plane widgets (pause, inject note, skip task) deferred to PR 6
 
 ### PR 6: Control plane
-**Files changed:** `dashboard.html`, `ralph.sh`
-**Tests:** Manual testing
+**Files changed:** `dashboard.html`, `telemetry.sh`
+**Files added:** `.ralph/serve.py` (tiny Python HTTP server for dashboard writes)
+**Tests:** Manual testing + `tests/telemetry.bats` updates
 - Add pause/resume toggle, inject note textarea, skip task buttons to dashboard
-- Dashboard writes to control/commands.json
-- Wire orchestrator to read commands.json each iteration
+- Dashboard enqueues commands to `commands.json` `pending` array via POST to serve.py
+- Add `skip-task` command handler to `process_control_commands()` in `telemetry.sh`
+- Orchestrator already reads `commands.json` each iteration (done in PR 4)
+- Note: serve.py must use write-to-temp-then-rename pattern to avoid race conditions with orchestrator reads
 
 ### PR 7: Documentation and cleanup
 **Files changed:** `README.md`, `CLAUDE.md`, `Ralph_Deluxe_Plan.md`
@@ -662,11 +704,35 @@ The existing codebase is ~90% preserved. The core insight — the handoff narrat
 
 ## Tracking implementation progress
 
-After completing work on each PR, update `v2-implementation-status.md` at the project root:
+**MANDATORY: You MUST update `v2-implementation-status.md` before writing your handoff.**
+
+This is not optional. The status document is the single source of truth for what has shipped vs. what remains. Failing to update it causes downstream confusion and incorrect handoff prompts.
+
+### When to update
+
+- **At the start of a PR:** Change the heading status to `IN PROGRESS`
+- **After each file is modified:** Mark the corresponding line item as `Done` with notes
+- **When you discover work done by a prior PR that the status doc missed:** Fix it immediately
+- **At the end of a PR:** Change the heading to `IMPLEMENTED`, update the Summary table, update `Last verified`
+- **If you add items not in the original plan:** Add new rows to the PR's table
+
+### What to update
 
 1. Change the PR's heading status (e.g., `NOT STARTED` → `IN PROGRESS` → `IMPLEMENTED`)
-2. Mark each line item in the PR's table as `Done` or `Partial` with notes
-3. Update the **Summary** table at the bottom
-4. Update the `Last verified` date at the top of the file
+2. Mark **every** line item in the PR's table as `Done` or `Partial` with notes describing what was actually done
+3. If the actual implementation diverges from the plan (e.g., different file location, different format, work done in an earlier PR), note the divergence
+4. Update the **Summary** table at the bottom
+5. Update the `Last verified` date at the top of the file
+6. If work for a future PR was partially done as a side effect, update that PR's table too (e.g., PR 4 implemented the orchestrator reading `commands.json`, which was listed under PR 6)
 
-This keeps a single source of truth for what has shipped vs. what remains. The status file lives alongside this plan so reviewers can cross-reference the two.
+### Verification checklist (run before writing handoff)
+
+- [ ] Every file I touched has a corresponding `Done` entry in the status table
+- [ ] The PR heading says `IMPLEMENTED`
+- [ ] The Summary table is current
+- [ ] The `Last verified` date is today
+- [ ] I checked adjacent PRs for items my work affected
+
+### Also update the progress log
+
+After updating the status document, also append a summary of your PR's work to `.ralph/progress-log.md`. This provides a chronological narrative that complements the status table.
