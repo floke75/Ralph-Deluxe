@@ -17,10 +17,10 @@
 | `sample-handoff.json` fixture | Add summary + freeform | Done | |
 | `sample-handoff-002.json` fixture | Add summary + freeform | Done | |
 | `sample-handoff-partial.json` fixture | Add summary + freeform | Done | |
-| `mock-claude-response.json` fixture | Add summary + freeform | **Not done** | Fixture lacks both fields |
+| `mock-claude-response.json` fixture | Add summary + freeform | Done | Both fields present |
 | Tests for `get_prev_handoff_for_mode()` | Add to `context.bats` | Done | 5 test cases |
 
-**Completion: ~95%** — only `mock-claude-response.json` fixture update missing.
+**Completion: 100%** — All items implemented, all fixtures updated.
 
 ---
 
@@ -103,7 +103,9 @@
 | Inject note textarea in dashboard | Writes `commands.json` | Not done |
 | Skip task buttons in dashboard | Writes `commands.json` | Not done |
 | Settings panel in dashboard | Writes `commands.json` | Not done |
-| Orchestrator reads `commands.json` | Each iteration | Not done |
+| Orchestrator reads `commands.json` | Each iteration | Done (PR 4) | `check_and_handle_commands()` in `telemetry.sh`, wired into `ralph.sh` main loop |
+| `skip-task` command handler | Add to `process_control_commands()` | Not done |
+| Tiny HTTP server for writes | `.ralph/serve.py` | Not done |
 
 ---
 
@@ -122,7 +124,7 @@
 
 | PR | Description | Status |
 |----|-------------|--------|
-| PR 1 | Handoff narrative fields | ~95% done |
+| PR 1 | Handoff narrative fields | Implemented |
 | PR 2 | Mode selection | Implemented |
 | PR 3 | Knowledge indexer | Implemented |
 | PR 4 | Telemetry module | Implemented |

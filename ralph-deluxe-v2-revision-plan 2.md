@@ -662,11 +662,35 @@ The existing codebase is ~90% preserved. The core insight — the handoff narrat
 
 ## Tracking implementation progress
 
-After completing work on each PR, update `v2-implementation-status.md` at the project root:
+**MANDATORY: You MUST update `v2-implementation-status.md` before writing your handoff.**
+
+This is not optional. The status document is the single source of truth for what has shipped vs. what remains. Failing to update it causes downstream confusion and incorrect handoff prompts.
+
+### When to update
+
+- **At the start of a PR:** Change the heading status to `IN PROGRESS`
+- **After each file is modified:** Mark the corresponding line item as `Done` with notes
+- **When you discover work done by a prior PR that the status doc missed:** Fix it immediately
+- **At the end of a PR:** Change the heading to `IMPLEMENTED`, update the Summary table, update `Last verified`
+- **If you add items not in the original plan:** Add new rows to the PR's table
+
+### What to update
 
 1. Change the PR's heading status (e.g., `NOT STARTED` → `IN PROGRESS` → `IMPLEMENTED`)
-2. Mark each line item in the PR's table as `Done` or `Partial` with notes
-3. Update the **Summary** table at the bottom
-4. Update the `Last verified` date at the top of the file
+2. Mark **every** line item in the PR's table as `Done` or `Partial` with notes describing what was actually done
+3. If the actual implementation diverges from the plan (e.g., different file location, different format, work done in an earlier PR), note the divergence
+4. Update the **Summary** table at the bottom
+5. Update the `Last verified` date at the top of the file
+6. If work for a future PR was partially done as a side effect, update that PR's table too (e.g., PR 4 implemented the orchestrator reading `commands.json`, which was listed under PR 6)
 
-This keeps a single source of truth for what has shipped vs. what remains. The status file lives alongside this plan so reviewers can cross-reference the two.
+### Verification checklist (run before writing handoff)
+
+- [ ] Every file I touched has a corresponding `Done` entry in the status table
+- [ ] The PR heading says `IMPLEMENTED`
+- [ ] The Summary table is current
+- [ ] The `Last verified` date is today
+- [ ] I checked adjacent PRs for items my work affected
+
+### Also update the progress log
+
+After updating the status document, also append a summary of your PR's work to `.ralph/progress-log.md`. This provides a chronological narrative that complements the status table.
