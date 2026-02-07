@@ -149,19 +149,167 @@ run_knowledge_indexer() {
     local indexer_prompt
     indexer_prompt="$(build_indexer_prompt "$compaction_input")"
 
+    local knowledge_index_md="${RALPH_DIR:-.ralph}/knowledge-index.md"
+    local knowledge_index_json="${RALPH_DIR:-.ralph}/knowledge-index.json"
+    local backup_md
+    backup_md="$(mktemp)"
+    local backup_json
+    backup_json="$(mktemp)"
+
+    snapshot_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"
+
     # Run the indexer iteration via Claude CLI.
     # In real mode, Claude writes knowledge-index.md and knowledge-index.json via built-in tools.
     # In dry-run mode, run_memory_iteration returns a mock response.
     local raw_response
     if ! raw_response="$(run_memory_iteration "$indexer_prompt")"; then
         log "error" "Knowledge indexer failed"
+        rm -f "$backup_md" "$backup_json"
         return 1
     fi
+
+    if ! verify_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"; then
+        restore_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"
+        rm -f "$backup_md" "$backup_json"
+        log "error" "Knowledge index verification failed; restored prior index snapshots"
+        return 1
+    fi
+
+    rm -f "$backup_md" "$backup_json"
 
     # Update compaction state counters
     update_compaction_state "$state_file"
 
     log "info" "--- Knowledge indexer end ---"
+}
+
+# snapshot_knowledge_indexes — Save current index files into temporary backups.
+# Backup format: first line "1" if original file existed, "0" if it did not.
+snapshot_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    if [[ -f "$knowledge_index_md" ]]; then
+        {
+            echo "1"
+            cat "$knowledge_index_md"
+        } > "$backup_md"
+    else
+        echo "0" > "$backup_md"
+    fi
+
+    if [[ -f "$knowledge_index_json" ]]; then
+        {
+            echo "1"
+            cat "$knowledge_index_json"
+        } > "$backup_json"
+    else
+        echo "0" > "$backup_json"
+    fi
+}
+
+# restore_knowledge_indexes — Restore index files from temporary backups.
+restore_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    restore_single_snapshot "$knowledge_index_md" "$backup_md"
+    restore_single_snapshot "$knowledge_index_json" "$backup_json"
+}
+
+restore_single_snapshot() {
+    local target="$1"
+    local snapshot="$2"
+
+    local existed
+    existed=$(head -n 1 "$snapshot")
+    if [[ "$existed" == "1" ]]; then
+        tail -n +2 "$snapshot" > "$target"
+    else
+        rm -f "$target"
+    fi
+}
+
+# verify_knowledge_indexes — Validate post-indexer output against required invariants.
+verify_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    verify_knowledge_index_header "$knowledge_index_md" || return 1
+    verify_hard_constraints_preserved "$knowledge_index_md" "$backup_md" || return 1
+    verify_json_append_only "$knowledge_index_json" "$backup_json" || return 1
+}
+
+verify_knowledge_index_header() {
+    local knowledge_index_md="$1"
+
+    [[ -f "$knowledge_index_md" ]] || return 1
+    grep -q '^# Knowledge Index$' "$knowledge_index_md" || return 1
+    grep -Eq '^Last updated: iteration [0-9]+ \(.+\)$' "$knowledge_index_md" || return 1
+}
+
+verify_hard_constraints_preserved() {
+    local knowledge_index_md="$1"
+    local backup_md="$2"
+    local existed
+    existed=$(head -n 1 "$backup_md")
+
+    [[ "$existed" == "1" ]] || return 0
+
+    local previous_constraints
+    previous_constraints=$(tail -n +2 "$backup_md" | awk '
+        /^## / { if (in_constraints) exit; in_constraints=($0=="## Constraints") }
+        in_constraints && /^- / {
+            line=$0
+            lower=tolower(line)
+            if (lower ~ /must not|must|never/) print line
+        }
+    ')
+
+    [[ -n "$previous_constraints" ]] || return 0
+
+    local constraint
+    while IFS= read -r constraint; do
+        [[ -z "$constraint" ]] && continue
+        if ! grep -Fqx -- "$constraint" "$knowledge_index_md" && ! grep -Fq -- "Superseded: ${constraint}" "$knowledge_index_md"; then
+            return 1
+        fi
+    done <<< "$previous_constraints"
+}
+
+verify_json_append_only() {
+    local knowledge_index_json="$1"
+    local backup_json="$2"
+
+    [[ -f "$knowledge_index_json" ]] || return 1
+
+    jq -e 'type == "array"' "$knowledge_index_json" >/dev/null || return 1
+    jq -e 'all(.[]; has("iteration") and (.iteration | type == "number") and has("task") and has("summary") and has("tags"))' "$knowledge_index_json" >/dev/null || return 1
+
+    local existed
+    existed=$(head -n 1 "$backup_json")
+    [[ "$existed" == "1" ]] || return 0
+
+    local old_json
+    old_json="$(tail -n +2 "$backup_json")"
+    [[ -n "${old_json//[[:space:]]/}" ]] || return 0
+
+    jq -e \
+        --argjson old "$old_json" \
+        '
+        . as $new |
+        ($new | type == "array") and
+        ($new | length >= ($old | length)) and
+        all($new[]; (.iteration | type == "number")) and
+        (([$new[].iteration] | length) == ([$new[].iteration] | unique | length)) and
+        all($old[]; . as $o | any($new[]; .iteration == $o.iteration and . == $o))
+        ' "$knowledge_index_json" >/dev/null || return 1
 }
 
 # update_compaction_state — Reset counters in state.json after compaction
