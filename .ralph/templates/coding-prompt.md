@@ -1,11 +1,21 @@
+<!-- Reference template: documents the prompt structure built by build_coding_prompt_v2() in context.sh.
+     This file is NOT read at runtime — the prompt is assembled programmatically. -->
+
 ## Current Task
 {{TASK_SECTION}}
 
-## Project Context (Compacted)
-{{COMPACTED_CONTEXT}}
+## Previous Attempt Failed
+{{FAILURE_CONTEXT}}
+<!-- Only present on retries -->
 
-## Previous Iteration Summary
+## Handoff from Previous Iteration
 {{PREV_HANDOFF}}
+<!-- handoff-only mode: freeform narrative only.
+     handoff-plus-index mode: freeform + structured context from previous iteration.
+     First iteration: "This is the first iteration. No previous handoff available." -->
+
+## Accumulated Knowledge
+<!-- handoff-plus-index mode only. Points to .ralph/knowledge-index.md for project history. -->
 
 ## Skills & Conventions
 {{SKILLS_SECTION}}

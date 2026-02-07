@@ -39,12 +39,12 @@ jq --arg id "$task_id" --arg key "status" --arg val "done" \
   '(.tasks[] | select(.id == $id))[$key] = $val' plan.json
 ```
 
-## Extract L1 Summary from Handoff
+## Extract One-Line Summary from Handoff
 ```bash
 jq -r '"[\(.task_completed.task_id)] \(.task_completed.summary | split(". ")[0]). \(if .task_completed.fully_complete then "Complete" else "Partial" end). \(.files_touched | length) files."' handoff.json
 ```
 
-## Extract L2 Details from Handoff
+## Extract Structured Details from Handoff
 ```bash
 jq -r '{
   task: .task_completed.task_id,

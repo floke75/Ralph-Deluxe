@@ -18,7 +18,7 @@ git clean -fd --exclude=.ralph/
 Stage everything and commit with the Ralph commit format:
 ```bash
 git add -A
-git commit -m "ralph[$iteration]: $task_id -- $message"
+git commit -m "ralph[$iteration]: $task_id — $message"
 ```
 
 ## Ensure Clean State Before Starting
@@ -32,7 +32,7 @@ fi
 
 ## Commit Message Format
 ```
-ralph[N]: TASK-ID -- short description
+ralph[N]: TASK-ID — short description
 ```
 - `N` is the iteration number
 - `TASK-ID` matches the task ID from plan.json

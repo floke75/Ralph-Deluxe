@@ -19,6 +19,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 - `.ralph/knowledge-index.json` — Iteration-keyed index for dashboard (handoff-plus-index mode)
 - `.ralph/progress-log.md` — Auto-generated progress log (human/LLM-readable)
 - `.ralph/progress-log.json` — Auto-generated progress log (dashboard-readable)
+- `.ralph/state.json` — Orchestrator runtime state (current iteration, mode, compaction counters)
 - `plan.json` — Task plan (project root for visibility)
 - `tests/` — bats-core test suite
 
@@ -31,7 +32,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 ## Handoff Schema
 - `summary` (string, required) — One-line description of what was accomplished
 - `freeform` (string, required) — Full narrative briefing for the next iteration (the most important field)
-- Plus structured fields: task_completed, deviations, bugs_encountered, architectural_notes, constraints_discovered, files_touched, plan_amendments, tests_added
+- Plus structured fields: task_completed, deviations, bugs_encountered, architectural_notes, constraints_discovered, files_touched, plan_amendments, tests_added, unfinished_business, recommendations
 
 ## Telemetry
 - Events logged to `.ralph/logs/events.jsonl` as JSONL (`{timestamp, event, message, metadata}`)
@@ -42,7 +43,7 @@ Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structur
 ## Dashboard
 - Single-file HTML at `.ralph/dashboard.html` (vanilla JS + Tailwind CDN)
 - Serve via `python3 .ralph/serve.py --port 8080` from project root
-- Polls state.json, plan.json, handoffs, events.jsonl, knowledge-index.json every 3 seconds
+- Polls state.json, plan.json, handoffs, events.jsonl, knowledge-index.json, progress-log.json every 3 seconds
 - Control plane: pause/resume, inject notes, skip tasks, settings — all POST to serve.py
 
 ## Bash Conventions
