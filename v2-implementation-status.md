@@ -57,17 +57,19 @@
 
 ---
 
-## PR 4: Telemetry Module — NOT STARTED
+## PR 4: Telemetry Module — IMPLEMENTED
 
-| Item | Planned | Status |
-|------|---------|--------|
-| `.ralph/lib/telemetry.sh` | New module | Not done |
-| `.ralph/telemetry/events.jsonl` | Append-only event stream | Not done |
-| `.ralph/control/commands.json` | Dashboard-to-orchestrator commands | Not done |
-| `emit_event()` calls in `ralph.sh` | iteration_start, coding_complete, validation_result | Not done |
-| Pause/resume check in main loop | `while is_paused` | Not done |
-| Inject note check in main loop | Read from commands.json | Not done |
-| `tests/telemetry.bats` | New test file | Not done |
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| `.ralph/lib/telemetry.sh` | New module | Done | 7 functions: emit_event, init_control_file, read/clear_pending_commands, process_control_commands, wait_while_paused, check_and_handle_commands |
+| `.ralph/logs/events.jsonl` | Append-only event stream | Done | JSONL format: {timestamp, event, message, metadata} per line |
+| `.ralph/control/commands.json` | Dashboard-to-orchestrator commands | Done | Queue-based: {pending: [{command, ...}]} — cleared after processing |
+| `emit_event()` calls in `ralph.sh` | iteration_start, coding_complete, validation_result | Done | Events: orchestrator_start/end, iteration_start/end, validation_pass/fail |
+| Pause/resume check in main loop | `while is_paused` | Done | check_and_handle_commands() at top of each iteration; RALPH_PAUSED flag with poll loop |
+| Inject note check in main loop | Read from commands.json | Done | inject-note command emits "note" event to event stream |
+| `tests/telemetry.bats` | New test file | Done | 32 tests covering all functions + JSONL stream integrity |
+
+**Completion: 100%** — 32 telemetry tests pass, all 18 integration tests pass, all existing tests unaffected.
 
 ---
 
@@ -110,7 +112,7 @@
 | PR 1 | Handoff narrative fields | ~95% done |
 | PR 2 | Mode selection | Implemented |
 | PR 3 | Knowledge indexer | Implemented |
-| PR 4 | Telemetry module | Not started |
+| PR 4 | Telemetry module | Implemented |
 | PR 5 | Dashboard (read-only) | Not started |
 | PR 6 | Control plane | Not started |
 | PR 7 | Documentation | Not started |
