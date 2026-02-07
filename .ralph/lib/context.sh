@@ -214,7 +214,7 @@ retrieve_relevant_knowledge() {
         return
     fi
 
-    awk -v terms="$terms_csv" -v limit="$max_lines" '
+    awk -v terms="$terms_csv" '
         BEGIN {
             split(terms, raw_terms, ",");
             for (i in raw_terms) {
@@ -227,7 +227,6 @@ retrieve_relevant_knowledge() {
             priority["gotchas"] = 4;
             priority["patterns"] = 5;
             current = "";
-            count = 0;
         }
         /^##[[:space:]]+/ {
             heading = tolower($0);
@@ -252,20 +251,10 @@ retrieve_relevant_knowledge() {
             }
 
             if (matched) {
-                key = priority[current] ":" NR;
-                rows[key] = line;
+                printf "%d\t%d\t%s\n", priority[current], NR, line;
             }
         }
-        END {
-            for (k in rows) keys[++n] = k;
-            asort(keys);
-
-            for (i = 1; i <= n && count < limit; i++) {
-                print rows[keys[i]];
-                count++;
-            }
-        }
-    ' "$index_file"
+    ' "$index_file" | sort -t $'\t' -k1,1n -k2,2n | cut -f3- | head -n "$max_lines"
 }
 
 # build_coding_prompt_v2 — Mode-aware prompt assembly using handoff-first context
