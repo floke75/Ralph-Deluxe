@@ -7,13 +7,67 @@ set -euo pipefail
 # Source config defaults if not already loaded
 RALPH_COMPACTION_THRESHOLD_BYTES="${RALPH_COMPACTION_THRESHOLD_BYTES:-32000}"
 RALPH_COMPACTION_INTERVAL="${RALPH_COMPACTION_INTERVAL:-5}"
+RALPH_NOVELTY_OVERLAP_THRESHOLD="${RALPH_NOVELTY_OVERLAP_THRESHOLD:-0.25}"
+RALPH_NOVELTY_RECENT_HANDOFFS="${RALPH_NOVELTY_RECENT_HANDOFFS:-3}"
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# check_compaction_trigger — Evaluate three triggers in order
+tokenize_terms() {
+    local text="$1"
+    echo "$text" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/ /g' \
+        | tr ' ' '\n' \
+        | sed '/^$/d' \
+        | awk 'length($0) > 2' \
+        | sort -u
+}
+
+build_task_term_signature() {
+    local task_json="$1"
+    local task_text
+    task_text=$(echo "$task_json" | jq -r '[.title // "", .description // "", (.libraries // [] | join(" "))] | join(" ")')
+    tokenize_terms "$task_text"
+}
+
+build_recent_handoff_term_signature() {
+    local handoffs_dir="$1"
+    local handoff_limit="$2"
+
+    if [[ ! -d "$handoffs_dir" ]]; then
+        return 0
+    fi
+
+    local summaries=""
+    while IFS= read -r handoff_file; do
+        local summary
+        summary=$(jq -r '[.summary?, .task_completed.summary?, .freeform?] | map(select(type == "string" and length > 0)) | join(" ")' "$handoff_file" 2>/dev/null || true)
+        summaries+=" ${summary}"
+    done < <(ls -1 "$handoffs_dir"/handoff-* 2>/dev/null | sort -V | tail -n "$handoff_limit")
+
+    tokenize_terms "$summaries"
+}
+
+calculate_term_overlap() {
+    local task_terms="$1"
+    local handoff_terms="$2"
+
+    local task_count
+    task_count=$(echo "$task_terms" | sed '/^$/d' | wc -l)
+    if [[ "$task_count" -eq 0 ]]; then
+        echo "0"
+        return 0
+    fi
+
+    local intersection
+    intersection=$(comm -12 <(echo "$task_terms") <(echo "$handoff_terms") | sed '/^$/d' | wc -l)
+    awk -v i="$intersection" -v t="$task_count" 'BEGIN { if (t == 0) print 0; else printf "%.4f", i / t }'
+}
+
+# check_compaction_trigger — Evaluate triggers in order
 # Returns 0 if compaction needed, 1 if not. Logs which trigger fired.
 check_compaction_trigger() {
     local state_file="${1:-.ralph/state.json}"
@@ -32,7 +86,25 @@ check_compaction_trigger() {
         fi
     fi
 
-    # Trigger 2: Threshold-based — handoff bytes since compaction > threshold
+    # Trigger 2: Novelty-based — low overlap with recent handoff summaries
+    if [[ -n "$next_task_json" ]]; then
+        local handoffs_dir="${RALPH_DIR:-$(dirname "$state_file")}/handoffs"
+        local task_terms
+        task_terms="$(build_task_term_signature "$next_task_json")"
+        local handoff_terms
+        handoff_terms="$(build_recent_handoff_term_signature "$handoffs_dir" "$RALPH_NOVELTY_RECENT_HANDOFFS")"
+
+        if [[ -n "$task_terms" ]] && [[ -n "$handoff_terms" ]]; then
+            local overlap
+            overlap="$(calculate_term_overlap "$task_terms" "$handoff_terms")"
+            if awk -v o="$overlap" -v threshold="$RALPH_NOVELTY_OVERLAP_THRESHOLD" 'BEGIN { exit !(o < threshold) }'; then
+                log "info" "Compaction trigger: novelty (overlap=${overlap} < ${RALPH_NOVELTY_OVERLAP_THRESHOLD})"
+                return 0
+            fi
+        fi
+    fi
+
+    # Trigger 3: Threshold-based — handoff bytes since compaction > threshold
     local handoff_bytes
     handoff_bytes=$(jq -r '.total_handoff_bytes_since_compaction // 0' "$state_file")
     if [[ "$handoff_bytes" -gt "$RALPH_COMPACTION_THRESHOLD_BYTES" ]]; then
@@ -40,7 +112,7 @@ check_compaction_trigger() {
         return 0
     fi
 
-    # Trigger 3: Periodic — coding iterations since compaction >= interval
+    # Trigger 4: Periodic — coding iterations since compaction >= interval
     local iterations_since
     iterations_since=$(jq -r '.coding_iterations_since_compaction // 0' "$state_file")
     if [[ "$iterations_since" -ge "$RALPH_COMPACTION_INTERVAL" ]]; then
@@ -149,19 +221,33 @@ run_knowledge_indexer() {
     local indexer_prompt
     indexer_prompt="$(build_indexer_prompt "$compaction_input")"
 
+    local knowledge_index_md="${RALPH_DIR:-.ralph}/knowledge-index.md"
+    local knowledge_index_json="${RALPH_DIR:-.ralph}/knowledge-index.json"
+    local backup_md
+    backup_md="$(mktemp)"
+    local backup_json
+    backup_json="$(mktemp)"
+
+    snapshot_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"
+
     # Run the indexer iteration via Claude CLI.
     # In real mode, Claude writes knowledge-index.md and knowledge-index.json via built-in tools.
     # In dry-run mode, run_memory_iteration returns a mock response.
     local raw_response
     if ! raw_response="$(run_memory_iteration "$indexer_prompt")"; then
         log "error" "Knowledge indexer failed"
+        rm -f "$backup_md" "$backup_json"
         return 1
     fi
 
-    if ! verify_knowledge_index "${RALPH_DIR:-.ralph}/knowledge-index.json"; then
-        log "error" "Knowledge index verification failed"
+    if ! verify_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"; then
+        restore_knowledge_indexes "$knowledge_index_md" "$knowledge_index_json" "$backup_md" "$backup_json"
+        rm -f "$backup_md" "$backup_json"
+        log "error" "Knowledge index verification failed; restored prior index snapshots"
         return 1
     fi
+
+    rm -f "$backup_md" "$backup_json"
 
     # Update compaction state counters
     update_compaction_state "$state_file"
@@ -169,6 +255,137 @@ run_knowledge_indexer() {
     log "info" "--- Knowledge indexer end ---"
 }
 
+# snapshot_knowledge_indexes — Save current index files into temporary backups.
+# Backup format: first line "1" if original file existed, "0" if it did not.
+snapshot_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    if [[ -f "$knowledge_index_md" ]]; then
+        {
+            echo "1"
+            cat "$knowledge_index_md"
+        } > "$backup_md"
+    else
+        echo "0" > "$backup_md"
+    fi
+
+    if [[ -f "$knowledge_index_json" ]]; then
+        {
+            echo "1"
+            cat "$knowledge_index_json"
+        } > "$backup_json"
+    else
+        echo "0" > "$backup_json"
+    fi
+}
+
+# restore_knowledge_indexes — Restore index files from temporary backups.
+restore_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    restore_single_snapshot "$knowledge_index_md" "$backup_md"
+    restore_single_snapshot "$knowledge_index_json" "$backup_json"
+}
+
+restore_single_snapshot() {
+    local target="$1"
+    local snapshot="$2"
+
+    local existed
+    existed=$(head -n 1 "$snapshot")
+    if [[ "$existed" == "1" ]]; then
+        tail -n +2 "$snapshot" > "$target"
+    else
+        rm -f "$target"
+    fi
+}
+
+# verify_knowledge_indexes — Validate post-indexer output against required invariants.
+verify_knowledge_indexes() {
+    local knowledge_index_md="$1"
+    local knowledge_index_json="$2"
+    local backup_md="$3"
+    local backup_json="$4"
+
+    verify_knowledge_index_header "$knowledge_index_md" || return 1
+    verify_hard_constraints_preserved "$knowledge_index_md" "$backup_md" || return 1
+    verify_json_append_only "$knowledge_index_json" "$backup_json" || return 1
+    verify_knowledge_index "$knowledge_index_json" || return 1
+}
+
+verify_knowledge_index_header() {
+    local knowledge_index_md="$1"
+
+    [[ -f "$knowledge_index_md" ]] || return 1
+    grep -q '^# Knowledge Index$' "$knowledge_index_md" || return 1
+    grep -Eq '^Last updated: iteration [0-9]+ \(.+\)$' "$knowledge_index_md" || return 1
+}
+
+verify_hard_constraints_preserved() {
+    local knowledge_index_md="$1"
+    local backup_md="$2"
+    local existed
+    existed=$(head -n 1 "$backup_md")
+
+    [[ "$existed" == "1" ]] || return 0
+
+    local previous_constraints
+    previous_constraints=$(tail -n +2 "$backup_md" | awk '
+        /^## / { if (in_constraints) exit; in_constraints=($0=="## Constraints") }
+        in_constraints && /^- / {
+            line=$0
+            lower=tolower(line)
+            if (lower ~ /must not|must|never/) print line
+        }
+    ')
+
+    [[ -n "$previous_constraints" ]] || return 0
+
+    local constraint
+    while IFS= read -r constraint; do
+        [[ -z "$constraint" ]] && continue
+        if ! grep -Fqx -- "$constraint" "$knowledge_index_md" && ! grep -Fq -- "Superseded: ${constraint}" "$knowledge_index_md"; then
+            return 1
+        fi
+    done <<< "$previous_constraints"
+}
+
+verify_json_append_only() {
+    local knowledge_index_json="$1"
+    local backup_json="$2"
+
+    [[ -f "$knowledge_index_json" ]] || return 1
+
+    jq -e 'type == "array"' "$knowledge_index_json" >/dev/null || return 1
+
+    # Legacy schema validation when iteration-based records are present.
+    if jq -e 'length > 0 and all(.[]; has("iteration"))' "$knowledge_index_json" >/dev/null 2>&1; then
+        jq -e 'all(.[]; has("iteration") and (.iteration | type == "number") and has("task") and has("summary") and has("tags"))' "$knowledge_index_json" >/dev/null || return 1
+    fi
+
+    local existed
+    existed=$(head -n 1 "$backup_json")
+    [[ "$existed" == "1" ]] || return 0
+
+    local old_json
+    old_json="$(tail -n +2 "$backup_json")"
+    [[ -n "${old_json//[[:space:]]/}" ]] || return 0
+
+    jq -e \
+        --argjson old "$old_json" \
+        '
+        . as $new |
+        ($new | type == "array") and
+        ($new | length >= ($old | length)) and
+        all($old[]; . as $o | any($new[]; . == $o))
+        ' "$knowledge_index_json" >/dev/null || return 1
+}
 
 # verify_knowledge_index — Validate knowledge-index.json consistency
 # Checks:
