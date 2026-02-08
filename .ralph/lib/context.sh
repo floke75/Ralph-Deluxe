@@ -3,19 +3,49 @@ set -euo pipefail
 
 # context.sh — Prompt assembly and context engineering for coding iterations
 #
-# PURPOSE: This is the most critical module in the orchestrator. It assembles the
-# prompt that Claude receives for each coding iteration. The prompt structure
-# directly determines what the LLM knows and how well it performs. Two versions:
-# build_coding_prompt_v2() (current, mode-aware, 8 sections) and the legacy
-# build_coding_prompt() (v1 fallback).
+# MODULE PURPOSE IN ORCHESTRATOR FLOW:
+# - This module turns plan/task state + prior handoff artifacts into the coding prompt
+#   consumed by the LLM in ralph.sh run_coding_cycle().
+# - It also enforces context-budget behavior through section-aware truncation so the
+#   orchestrator preserves high-value context first when prompts are too large.
+# - It supports both operating modes:
+#   - handoff-only: short-term memory is the previous handoff freeform narrative only.
+#   - handoff-plus-index: includes narrative + structured retrieval from knowledge index.
 #
-# KEY DESIGN DECISIONS:
-# - Handoff-first: The previous iteration's freeform narrative IS the primary
-#   memory, not a summary or index. Everything else is supplementary.
-# - Section-aware truncation: When the prompt exceeds the token budget, sections
-#   are trimmed in priority order (least important first) rather than raw truncation.
-# - Mode-sensitive: handoff-only mode sends less context (just freeform narrative);
-#   handoff-plus-index mode adds structured L2 data and knowledge index retrieval.
+# KEY EXPORTED FUNCTIONS:
+# - build_coding_prompt_v2(task_json, mode, skills_content, failure_context): primary
+#   prompt constructor used in normal operation.
+# - truncate_to_budget(content, budget_tokens): post-assembly trimmer that preserves
+#   parser-visible section structure and emits truncation metadata.
+# - get_prev_handoff_for_mode(handoffs_dir, mode): mode-sensitive previous handoff
+#   retrieval used by v2 prompt assembly.
+# - retrieve_relevant_knowledge(task_json, index_file, max_lines): targeted knowledge
+#   lookup for handoff-plus-index mode.
+# - Legacy compatibility helpers kept for v1 fallback:
+#   load_skills(), get_prev_handoff_summary(), get_earlier_l1_summaries(),
+#   format_compacted_context(), build_coding_prompt().
+#
+# INPUTS / OUTPUTS / CRITICAL INVARIANTS:
+# - Inputs: task JSON, mode flag, failure context text, optional compacted context,
+#   files under .ralph/handoffs/, .ralph/knowledge-index.md, .ralph/skills/, and
+#   .ralph/templates/coding-prompt-footer.md.
+# - Outputs: markdown prompt text for LLM submission; when truncating, also emits a
+#   trailing [[TRUNCATION_METADATA]] JSON line for tests/debugging.
+# - Invariants:
+#   - Prompt section headers used by v2 truncation are parser-sensitive literals.
+#   - Header names and order must stay aligned between build_coding_prompt_v2() and
+#     truncate_to_budget() awk matching logic.
+#   - Previous handoff retrieval is mode-sensitive by design and must preserve
+#     handoff-only vs handoff-plus-index behavior differences.
+#
+# PARSER-SENSITIVE CONSTRAINTS:
+# - Do not rename any of these v2 headers without updating truncation/retrieval logic
+#   that matches them literally via awk: 
+#   "## Current Task", "## Failure Context", "## Retrieved Memory",
+#   "## Previous Handoff", "## Retrieved Project Memory",
+#   "## Accumulated Knowledge", "## Skills", "## Output Instructions".
+# - These literals are consumed by truncation parsing; changing them silently degrades
+#   budget enforcement behavior.
 #
 # DEPENDENCIES:
 #   Called by: ralph.sh run_coding_cycle() (build_coding_prompt_v2, truncate_to_budget,
@@ -82,6 +112,10 @@ estimate_tokens() {
 #
 # Args: $1 = content, $2 = budget_tokens (optional, default RALPH_CONTEXT_BUDGET_TOKENS)
 # Stdout: truncated content + truncation metadata
+# Caller: ralph.sh run_coding_cycle() after prompt assembly.
+# Side effects: none on disk; CPU-only string processing and writes result to stdout.
+# Why-specific behavior: trims by semantic sections to preserve high-value context and
+# parser-visible structure, rather than doing a blind tail cut that would drop task intent.
 truncate_to_budget() {
     local content="$1"
     local budget_tokens="${2:-${RALPH_CONTEXT_BUDGET_TOKENS}}"
@@ -207,6 +241,10 @@ truncate_to_budget() {
 # Skill files live in .ralph/skills/<name>.md and are injected into ## Skills.
 # Args: $1 = task JSON, $2 = skills directory path
 # Stdout: concatenated skill file contents
+# Caller: ralph.sh run_coding_cycle() and legacy v1/v2 prompt construction paths.
+# Side effects: reads markdown files from skills_dir; emits warn logs for missing files.
+# Why-specific behavior: missing skills are non-fatal so task execution continues with
+# best-effort conventions instead of hard-failing prompt assembly.
 load_skills() {
     local task_json="$1"
     local skills_dir="${2:-.ralph/skills}"
@@ -260,6 +298,10 @@ get_prev_handoff_summary() {
 # Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
 # Stdout: formatted context string for ## Previous Handoff section
 # CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
+# Caller: build_coding_prompt_v2() for the parser-sensitive "## Previous Handoff" section.
+# Side effects: reads latest .ralph/handoffs/handoff-*.json; no filesystem writes.
+# Why-specific behavior: mode determines memory shape—handoff-only preserves pure narrative,
+# while handoff-plus-index appends compact structured L2 context for tactical recall.
 get_prev_handoff_for_mode() {
     local handoffs_dir="${1:-.ralph/handoffs}"
     local mode="${2:-handoff-only}"
@@ -330,6 +372,9 @@ get_earlier_l1_summaries() {
 # Used by legacy build_coding_prompt() only.
 # Args: $1 = compacted context JSON file path
 # Stdout: formatted markdown sections
+# Caller: legacy build_coding_prompt() only.
+# Side effects: reads compacted context JSON file.
+# Why-specific behavior: renders stable subsection labels expected by older fixtures/tests.
 format_compacted_context() {
     local compacted_file="$1"
 
@@ -376,6 +421,9 @@ format_compacted_context() {
 # Args: $1 = task JSON, $2 = index file path, $3 = max lines (default 12)
 # Stdout: matched knowledge lines, priority-sorted
 # CALLER: build_coding_prompt_v2() for ## Retrieved Project Memory section
+# Side effects: reads knowledge index file; no writes.
+# Why-specific behavior: category-priority sorting front-loads constraints/decisions so
+# truncation pressure is less likely to remove safety-critical project memory first.
 retrieve_relevant_knowledge() {
     local task_json="$1"
     local index_file="${2:-.ralph/knowledge-index.md}"
@@ -474,6 +522,10 @@ retrieve_relevant_knowledge() {
 # Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context
 # Stdout: assembled prompt ready for truncation and CLI submission
 # CALLER: ralph.sh run_coding_cycle() (behind declare -f guard for v1 fallback)
+# Side effects: reads latest handoff JSON, knowledge index, and output-footer template;
+# does not write files.
+# Why-specific behavior: keeps exact "##" header literals and order aligned with
+# truncate_to_budget() so section-aware parsing/trimming stays deterministic.
 build_coding_prompt_v2() {
     local task_json="$1"
     local mode="${2:-handoff-only}"
