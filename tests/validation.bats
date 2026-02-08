@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# Tests for .ralph/lib/validation.sh
+# Scope: unit tests for validation strategy evaluation and result persistence helpers.
+# Fixture notes: tests run inside TEST_DIR with a minimal .ralph/logs/validation tree
+# and a stub log() function before sourcing validation.sh.
+
 
 setup() {
     # Create a temporary directory for each test

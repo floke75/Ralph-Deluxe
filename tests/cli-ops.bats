@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# Tests for .ralph/lib/cli-ops.sh
+# Scope: unit tests for CLI response parsing and handoff extraction helpers.
+# Fixture notes: setup builds a minimal .ralph/config tree with lightweight schemas
+# and empty MCP configs so cli-ops.sh can run without external services.
+
 
 setup() {
     TEST_DIR="$(mktemp -d)"

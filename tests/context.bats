@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/context.bats — Tests for .ralph/lib/context.sh
+# Scope: unit tests for context token estimation and budget-based prompt truncation.
+# Fixture notes: each test uses an isolated temp workspace with copied fixtures,
+# synthetic skills markdown files, and handoffs under TEST_DIR.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 

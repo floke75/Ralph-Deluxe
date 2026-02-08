@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/integration.bats — Integration tests for ralph.sh orchestrator
+# Scope: integration tests for end-to-end ralph.sh orchestration flows.
+# Fixture notes: setup assembles a full temporary .ralph runtime by copying libs,
+# configs, templates, and script binaries into TEST_DIR before execution.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 

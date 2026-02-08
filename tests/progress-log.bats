@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/progress-log.bats — Tests for .ralph/lib/progress-log.sh
+# Scope: unit tests for progress summary rendering from plan and handoff data.
+# Fixture notes: setup creates an inline multi-status plan plus .ralph directories
+# in TEST_DIR so progress-log.sh reads predictable local fixtures.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
