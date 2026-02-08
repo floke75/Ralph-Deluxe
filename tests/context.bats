@@ -566,7 +566,7 @@ EOF
     [[ "$output" != *"knowledge-index.md"* ]]
 }
 
-@test "build_coding_prompt_v2 uses get_prev_handoff_for_mode for context" {
+@test "build_coding_prompt_v2 includes retrieved memory constraints and decisions from handoff" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
@@ -580,6 +580,38 @@ EOF
     [[ "$output" == *"### Constraints"* ]]
     [[ "$output" == *"git clean -fd removes files matching .gitignore patterns"* ]]
     [[ "$output" == *"### Decisions"* ]]
+}
+
+@test "build_coding_prompt_v2 adds structured L2 in Previous Handoff for handoff-plus-index mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
+    [[ "$status" -eq 0 ]]
+    # In handoff-plus-index mode, the Previous Handoff section should include
+    # structured L2 data from get_prev_handoff_for_mode (not just freeform)
+    [[ "$output" == *"Structured context from previous iteration"* ]]
+    [[ "$output" == *"TASK-003"* ]]
+}
+
+@test "build_coding_prompt_v2 does NOT add structured L2 in Previous Handoff for handoff-only mode" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    [[ "$status" -eq 0 ]]
+    # In handoff-only mode, no structured L2 in Previous Handoff section
+    [[ "$output" != *"Structured context from previous iteration"* ]]
 }
 
 @test "build_coding_prompt_v2 priority order: task > failure > handoff > retrieved > knowledge > skills > output" {
@@ -617,4 +649,102 @@ EOF
     [[ "$retrieved_pos" -lt "$knowledge_pos" ]]
     [[ "$knowledge_pos" -lt "$skills_pos" ]]
     [[ "$skills_pos" -lt "$output_pos" ]]
+}
+
+@test "truncate_to_budget handles Retrieved Project Memory and Accumulated Knowledge sections" {
+    local sectioned
+    sectioned=$(cat <<'EOF'
+## Current Task
+ID: TASK-123
+Title: Test truncation
+
+Description:
+Details.
+
+Acceptance Criteria:
+- Pass
+
+## Failure Context
+No failure context.
+
+## Retrieved Memory
+### Constraints
+- Constraint A
+
+### Decisions
+- Decision A
+
+## Previous Handoff
+Narrative text. Narrative text. Narrative text.
+
+## Retrieved Project Memory
+- [K-constraint-timeout] Shell MUST NOT exceed 30s [source: iter 7]
+- [K-decision-jq-streaming] Use jq streaming mode [source: iter 6]
+
+## Accumulated Knowledge
+A knowledge index is at .ralph/knowledge-index.md.
+
+## Skills
+Skill details. Skill details. Skill details. Skill details.
+
+## Output Instructions
+Output details. Output details. Output details. Output details.
+EOF
+)
+
+    # Budget large enough to keep everything
+    run truncate_to_budget "$sectioned" 500
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Retrieved Project Memory"* ]]
+    [[ "$output" == *"K-constraint-timeout"* ]]
+    [[ "$output" == *"## Accumulated Knowledge"* ]]
+}
+
+@test "truncate_to_budget trims Accumulated Knowledge before Skills under pressure" {
+    local sectioned
+    sectioned=$(cat <<'EOF'
+## Current Task
+ID: TASK-789
+Title: Budget test
+
+Description:
+Desc.
+
+Acceptance Criteria:
+- Pass
+
+## Failure Context
+No failure context.
+
+## Retrieved Memory
+### Constraints
+- C
+
+## Previous Handoff
+Short narrative.
+
+## Retrieved Project Memory
+Important retrieved knowledge line.
+
+## Accumulated Knowledge
+A knowledge index is at .ralph/knowledge-index.md. Consult it if you need project history beyond the handoff above. Extra padding to make this section large enough to matter in truncation testing.
+
+## Skills
+SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL.
+
+## Output Instructions
+OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT.
+EOF
+)
+
+    # Set a budget tight enough to trigger truncation of Accumulated Knowledge
+    # but large enough to keep Retrieved Project Memory intact.
+    # Content is ~685 chars with headers; Accumulated Knowledge body is ~175 chars.
+    # Budget of 130 tokens (520 chars) forces Accumulated Knowledge removal only.
+    run truncate_to_budget "$sectioned" 130
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"[[TRUNCATION_METADATA]]"* ]]
+    [[ "$output" == *'"Accumulated Knowledge"'* ]]
+    # Retrieved Project Memory should still be present (higher priority than Accumulated Knowledge)
+    [[ "$output" == *"Important retrieved knowledge line"* ]]
 }
