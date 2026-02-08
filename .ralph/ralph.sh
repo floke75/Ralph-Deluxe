@@ -51,12 +51,10 @@ log() {
         local level_upper
         level_upper="$(echo "$level" | tr '[:lower:]' '[:upper:]')"
         local entry="[${timestamp}] [${level_upper}] ${message}"
-        echo "$entry" >> "${PROJECT_ROOT}/${LOG_FILE}"
-        if [[ "$level" == "error" ]]; then
-            echo "$entry" >&2
-        else
-            echo "$entry"
-        fi
+        local log_path="${PROJECT_ROOT}/${LOG_FILE}"
+        mkdir -p "$(dirname "$log_path")"
+        echo "$entry" >> "$log_path"
+        echo "$entry" >&2
     fi
 }
 

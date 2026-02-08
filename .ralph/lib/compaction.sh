@@ -233,8 +233,7 @@ run_knowledge_indexer() {
     # Run the indexer iteration via Claude CLI.
     # In real mode, Claude writes knowledge-index.md and knowledge-index.json via built-in tools.
     # In dry-run mode, run_memory_iteration returns a mock response.
-    local raw_response
-    if ! raw_response="$(run_memory_iteration "$indexer_prompt")"; then
+    if ! run_memory_iteration "$indexer_prompt" >/dev/null; then
         log "error" "Knowledge indexer failed"
         rm -f "$backup_md" "$backup_json"
         return 1
