@@ -20,7 +20,7 @@ set -euo pipefail
 # - get_prev_handoff_for_mode(handoffs_dir, mode): mode-sensitive previous handoff
 #   retrieval used by v2 prompt assembly.
 # - retrieve_relevant_knowledge(task_json, index_file, max_lines): targeted knowledge
-#   lookup for handoff-plus-index mode.
+#   lookup. Retained for backward compatibility; no longer called by build_coding_prompt_v2().
 # - Legacy compatibility helpers kept for v1 fallback:
 #   load_skills(), get_prev_handoff_summary(), get_earlier_l1_summaries(),
 #   format_compacted_context(), build_coding_prompt().
@@ -92,7 +92,8 @@ if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS_HPI:-}" ]]; then
 fi
 
 # Return the appropriate token budget for the given mode.
-# handoff-plus-index gets a larger budget because it inlines the full knowledge index.
+# WHY: handoff-plus-index inlines the full knowledge index, needing ~2x the budget.
+# CALLER: ralph.sh run_coding_cycle() (passes result to truncate_to_budget)
 # Args: $1 = mode ("handoff-only" or "handoff-plus-index")
 # Stdout: token budget integer
 get_budget_for_mode() {
@@ -464,7 +465,8 @@ format_compacted_context() {
 }
 
 # Pull a bounded set of relevant knowledge entries from the knowledge index.
-# Used in handoff-plus-index mode to inject task-relevant context.
+# NOTE: Retained for backward compatibility. No longer called by build_coding_prompt_v2(),
+# which now inlines the full knowledge index instead of keyword-matching.
 #
 # HOW RELEVANCE WORKS:
 # 1. Extract keywords from task id, title, description (min 2 chars), and libraries array
