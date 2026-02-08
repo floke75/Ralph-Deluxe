@@ -18,6 +18,14 @@ A categorized markdown file organized by topic. Each entry should be one line wi
 
 Include a header line: `# Knowledge Index` followed by `Last updated: iteration N (timestamp)`.
 
+Each markdown entry line must include:
+- a stable memory ID (`K-constraint-<slug>`, `K-decision-<slug>`, etc.)
+- source iteration(s) (single value or range/list)
+- optional supersedes ID when this replaces older knowledge
+
+Recommended entry format:
+`- [K-<type>-<slug>] <statement> [source: iter 7,8] [supersedes: K-<type>-<slug>]`
+
 Remove entries that are no longer relevant. Keep entries scannable — catalog, don't summarize.
 
 ### 2. `.ralph/knowledge-index.json` (for the dashboard)
@@ -27,6 +35,12 @@ A JSON array where each iteration gets one entry with fields:
 - `task` (string — the task ID)
 - `summary` (string — one-line summary)
 - `tags` (array of strings — lowercase, hyphenated, 1-2 words each)
+- `memory_ids` (array of stable IDs from markdown entries touched in this iteration)
+- `source_iterations` (array of iteration numbers that informed this entry)
+- `status` (`active` | `superseded` | `deprecated`)
+
+Optional:
+- `supersedes` (array of memory IDs replaced by this entry)
 
 Append new entries for iterations not already present. Keep existing entries intact.
 

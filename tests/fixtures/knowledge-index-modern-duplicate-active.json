@@ -1,0 +1,20 @@
+[
+  {
+    "iteration": 10,
+    "task": "TASK-010",
+    "summary": "First active entry",
+    "tags": ["indexing"],
+    "memory_ids": ["K-pattern-one"],
+    "source_iterations": [10],
+    "status": "active"
+  },
+  {
+    "iteration": 11,
+    "task": "TASK-011",
+    "summary": "Duplicate active ID",
+    "tags": ["indexing"],
+    "memory_ids": ["K-pattern-one"],
+    "source_iterations": [11],
+    "status": "active"
+  }
+]

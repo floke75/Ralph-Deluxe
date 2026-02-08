@@ -118,6 +118,38 @@ async function fetchText(path) {
   return resp.text();
 }
 
+
+function normalizeKnowledgeIndexEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+
+  const memoryIds = Array.isArray(entry.memory_ids)
+    ? entry.memory_ids.filter(v => typeof v === "string")
+    : [];
+
+  let sourceIterations = [];
+  if (Array.isArray(entry.source_iterations)) {
+    sourceIterations = entry.source_iterations.filter(v => Number.isInteger(v));
+  } else if (Number.isInteger(entry.iteration)) {
+    sourceIterations = [entry.iteration];
+  }
+
+  const status = typeof entry.status === "string" ? entry.status : "active";
+  const supersedes = Array.isArray(entry.supersedes)
+    ? entry.supersedes.filter(v => typeof v === "string")
+    : (typeof entry.supersedes === "string" ? [entry.supersedes] : []);
+
+  return {
+    iteration: Number.isInteger(entry.iteration) ? entry.iteration : 0,
+    task: typeof entry.task === "string" ? entry.task : "",
+    summary: typeof entry.summary === "string" ? entry.summary : "",
+    tags: Array.isArray(entry.tags) ? entry.tags.filter(v => typeof v === "string") : [],
+    memory_ids: memoryIds,
+    source_iterations: sourceIterations,
+    status,
+    supersedes
+  };
+}
+
 function parseJSONL(text) {
   if (!text) return [];
   return text.trim().split("\n").filter(Boolean).map(line => {
@@ -139,7 +171,7 @@ async function pollData() {
 
     if (orchState) state.orchestrator = orchState;
     if (plan) state.plan = plan;
-    if (indexData) state.knowledgeIndex = Array.isArray(indexData) ? indexData : [];
+    if (indexData) state.knowledgeIndex = Array.isArray(indexData) ? indexData.map(normalizeKnowledgeIndexEntry).filter(Boolean) : [];
     if (progressData) state.progressLog = progressData;
     state.events = parseJSONL(eventsText);
 

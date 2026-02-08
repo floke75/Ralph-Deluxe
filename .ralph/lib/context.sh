@@ -33,9 +33,66 @@ truncate_to_budget() {
         return
     fi
 
+    # Section-aware truncation for v2 prompts.
+    if [[ "$content" == *"## Current Task"* && "$content" == *"## Output Instructions"* ]]; then
+        local current_task failure_context retrieved_memory previous_handoff skills output_instructions
+        current_task="$(echo "$content" | awk 'BEGIN{capture=0} /^## Current Task$/{capture=1} /^## Failure Context$/{capture=0} capture{print}')"
+        failure_context="$(echo "$content" | awk 'BEGIN{capture=0} /^## Failure Context$/{capture=1} /^## Retrieved Memory$/{capture=0} capture{print}')"
+        retrieved_memory="$(echo "$content" | awk 'BEGIN{capture=0} /^## Retrieved Memory$/{capture=1} /^## Previous Handoff$/{capture=0} capture{print}')"
+        previous_handoff="$(echo "$content" | awk 'BEGIN{capture=0} /^## Previous Handoff$/{capture=1} /^## Skills$/{capture=0} capture{print}')"
+        skills="$(echo "$content" | awk 'BEGIN{capture=0} /^## Skills$/{capture=1} /^## Output Instructions$/{capture=0} capture{print}')"
+        output_instructions="$(echo "$content" | awk 'BEGIN{capture=0} /^## Output Instructions$/{capture=1} capture{print}')"
+
+        local truncated_sections=()
+        local rebuilt over trim_by
+
+        rebuilt="${current_task}"$'\n\n'"${failure_context}"$'\n\n'"${retrieved_memory}"$'\n\n'"${previous_handoff}"$'\n\n'"${skills}"$'\n\n'"${output_instructions}"
+
+        # Lowest to highest priority: skills, output instructions, narrative/history, constraints/decisions, failure.
+        while [[ ${#rebuilt} -gt $max_chars ]]; do
+            over=$(( ${#rebuilt} - max_chars ))
+
+            if [[ -n "$skills" && ${#skills} -gt 10 ]]; then
+                trim_by=$(( over < ${#skills} - 10 ? over : ${#skills} - 10 ))
+                skills="${skills:0:$(( ${#skills} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Skills "* ]] || truncated_sections+=("Skills")
+            elif [[ -n "$output_instructions" && ${#output_instructions} -gt 22 ]]; then
+                trim_by=$(( over < ${#output_instructions} - 22 ? over : ${#output_instructions} - 22 ))
+                output_instructions="${output_instructions:0:$(( ${#output_instructions} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Output Instructions "* ]] || truncated_sections+=("Output Instructions")
+            elif [[ -n "$previous_handoff" && ${#previous_handoff} -gt 18 ]]; then
+                trim_by=$(( over < ${#previous_handoff} - 18 ? over : ${#previous_handoff} - 18 ))
+                previous_handoff="${previous_handoff:0:$(( ${#previous_handoff} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Previous Handoff "* ]] || truncated_sections+=("Previous Handoff")
+            elif [[ -n "$retrieved_memory" && ${#retrieved_memory} -gt 17 ]]; then
+                trim_by=$(( over < ${#retrieved_memory} - 17 ? over : ${#retrieved_memory} - 17 ))
+                retrieved_memory="${retrieved_memory:0:$(( ${#retrieved_memory} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Retrieved Memory "* ]] || truncated_sections+=("Retrieved Memory")
+            elif [[ -n "$failure_context" && ${#failure_context} -gt 16 ]]; then
+                trim_by=$(( over < ${#failure_context} - 16 ? over : ${#failure_context} - 16 ))
+                failure_context="${failure_context:0:$(( ${#failure_context} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
+            else
+                # Last-resort fallback preserves the beginning of Current Task where task ID/title and headers live.
+                rebuilt="${rebuilt:0:$max_chars}"
+                [[ " ${truncated_sections[*]} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
+                break
+            fi
+
+            rebuilt="${current_task}"$'\n\n'"${failure_context}"$'\n\n'"${retrieved_memory}"$'\n\n'"${previous_handoff}"$'\n\n'"${skills}"$'\n\n'"${output_instructions}"
+        done
+
+        local trunc_json
+        trunc_json=$(printf '%s\n' "${truncated_sections[@]}" | jq -R . | jq -s --argjson max_chars "$max_chars" --argjson original_chars "$current_chars" '{truncated_sections: ., max_chars: $max_chars, original_chars: $original_chars}')
+        echo "$rebuilt"
+        echo ""
+        echo "[[TRUNCATION_METADATA]] ${trunc_json}"
+        return
+    fi
+
     echo "${content:0:$max_chars}"
     echo ""
-    echo "[CONTEXT TRUNCATED — ${current_chars} chars exceeded ${max_chars} char budget]"
+    echo "[[TRUNCATION_METADATA]] {\"truncated_sections\":[\"unstructured\"],\"max_chars\":${max_chars},\"original_chars\":${current_chars}}"
 }
 
 # load_skills — Read and concatenate skill files based on task's skills array
@@ -269,49 +326,67 @@ build_coding_prompt_v2() {
     local handoffs_dir=".ralph/handoffs"
     local prompt=""
 
-    # === TASK (always) ===
-    prompt+="## Current Task"$'\n'
-    prompt+="$(echo "$task_json" | jq -r '"ID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + (.acceptance_criteria | map("- " + .) | join("\n"))')"$'\n\n'
+    local task_section
+    task_section="$(echo "$task_json" | jq -r '"## Current Task\nID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + (.acceptance_criteria | map("- " + .) | join("\n"))')"
 
-    # === FAILURE CONTEXT (if retrying) ===
+    local failure_section="## Failure Context
+No failure context."
     if [[ -n "$failure_context" ]]; then
-        prompt+="## Previous Attempt Failed"$'\n'
-        prompt+="$failure_context"$'\n\n'
+        failure_section="## Failure Context
+${failure_context}"
     fi
 
-    # === PREVIOUS HANDOFF (always — this is the core) ===
-    local prev_handoff
-    prev_handoff="$(get_prev_handoff_for_mode "$handoffs_dir" "$mode")"
-    if [[ -n "$prev_handoff" ]]; then
-        prompt+="## Handoff from Previous Iteration"$'\n'
-        prompt+="$prev_handoff"$'\n\n'
-    else
-        prompt+="## Context"$'\n'
-        prompt+="This is the first iteration. No previous handoff available."$'\n\n'
+    local retrieved_memory_section="## Retrieved Memory
+No retrieved memory available."
+    local latest_handoff
+    latest_handoff=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -V | tail -1 || true)
+    if [[ -n "$latest_handoff" ]]; then
+        local constraints decisions
+        constraints=$(jq -r '[.constraints_discovered[]? | "- " + .constraint + ": " + (.workaround // .impact // "no workaround recorded")] | join("\n")' "$latest_handoff")
+        decisions=$(jq -r '[.architectural_notes[]? | "- " + .] | join("\n")' "$latest_handoff")
+        retrieved_memory_section="## Retrieved Memory
+### Constraints
+${constraints:-No constraints recorded.}
+
+### Decisions
+${decisions:-No decisions recorded.}"
+        if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+            retrieved_memory_section+=$'\n\n### Knowledge Index\n- .ralph/knowledge-index.md'
+        fi
+    fi
+
+    local narrative
+    narrative="$(get_prev_handoff_for_mode "$handoffs_dir" "handoff-only")"
+    local previous_handoff_section="## Previous Handoff
+This is the first iteration. No previous handoff available."
+    if [[ -n "$narrative" ]]; then
+        previous_handoff_section="## Previous Handoff
+${narrative}"
     fi
 
     # === RETRIEVED PROJECT MEMORY (handoff-plus-index mode only) ===
+    local retrieved_project_memory_section=""
     if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
-        local retrieved_memory
-        retrieved_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
-        if [[ -n "$retrieved_memory" ]]; then
-            prompt+="## Retrieved Project Memory"$'\n'
-            prompt+="$retrieved_memory"$'\n\n'
+        local retrieved_project_memory
+        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
+        if [[ -n "$retrieved_project_memory" ]]; then
+            retrieved_project_memory_section="## Retrieved Project Memory
+${retrieved_project_memory}"
         fi
     fi
 
     # === KNOWLEDGE INDEX POINTER (handoff-plus-index mode only) ===
+    local accumulated_knowledge_section=""
     if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
-        prompt+="## Accumulated Knowledge"$'\n'
-        prompt+="A knowledge index of learnings from all previous iterations "
-        prompt+="is available at .ralph/knowledge-index.md. Consult it if you "
-        prompt+="need project history beyond what's in the handoff above."$'\n\n'
+        accumulated_knowledge_section="## Accumulated Knowledge
+A knowledge index of learnings from all previous iterations is available at .ralph/knowledge-index.md. Consult it if you need project history beyond what's in the handoff above."
     fi
 
-    # === SKILLS (if any) ===
+    local skills_section="## Skills
+No specific skills loaded."
     if [[ -n "$skills_content" ]]; then
-        prompt+="## Skills & Conventions"$'\n'
-        prompt+="$skills_content"$'\n\n'
+        skills_section="## Skills
+${skills_content}"
     fi
 
     # === OUTPUT INSTRUCTIONS ===
@@ -340,7 +415,21 @@ The structured fields (task_completed, files_touched, etc.) help the
 orchestrator track progress. The freeform narrative is how the next
 iteration will actually understand what happened."
     fi
-    prompt+="$output_instructions"
+    local output_section="## Output Instructions
+${output_instructions}"
+
+    prompt+="$task_section"$'\n\n'
+    prompt+="$failure_section"$'\n\n'
+    prompt+="$retrieved_memory_section"$'\n\n'
+    prompt+="$previous_handoff_section"$'\n\n'
+    if [[ -n "$retrieved_project_memory_section" ]]; then
+        prompt+="$retrieved_project_memory_section"$'\n\n'
+    fi
+    if [[ -n "$accumulated_knowledge_section" ]]; then
+        prompt+="$accumulated_knowledge_section"$'\n\n'
+    fi
+    prompt+="$skills_section"$'\n\n'
+    prompt+="$output_section"
 
     echo "$prompt"
 }
