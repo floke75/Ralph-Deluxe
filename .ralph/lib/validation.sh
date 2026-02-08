@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# validation.sh — Post-iteration validation gate
+# validation.sh — Post-iteration validation gate for go/no-go decisions
+#
+# ROLE IN LOOP CONTROL:
+#   Validation is the policy checkpoint between "code changed" and "state is
+#   accepted." After each iteration, this module executes configured checks and
+#   emits a pass/fail signal consumed by ralph.sh to decide whether work can
+#   move forward (go: commit path) or must be retried/rolled back (no-go path).
+#   In other words, this file is the boundary where command outcomes become
+#   orchestration decisions.
 #
 # PURPOSE: Runs configured validation commands after each coding iteration to
 # decide whether to commit or rollback. Supports three strategies that trade off
@@ -14,6 +22,9 @@ set -euo pipefail
 #   Globals read: RALPH_VALIDATION_COMMANDS (array of shell commands),
 #                 RALPH_VALIDATION_STRATEGY ("strict"|"lenient"|"tests_only")
 #   Files written: .ralph/logs/validation/iter-N.json (per-iteration results)
+#   State interactions: ralph.sh reads return code from run_validation() to
+#     drive commit/retry flow, and may call generate_failure_context() to build
+#     .ralph/context/failure-context.md for the next prompt.
 #
 # DATA FLOW:
 #   run_validation(iteration)
@@ -55,7 +66,21 @@ classify_command() {
 }
 
 # Run all configured validation checks and write structured results.
-# Each command is executed via eval (supports pipes, flags, etc.).
+# Command resolution/execution:
+#   - Uses RALPH_VALIDATION_COMMANDS exactly as configured (ordered array).
+#   - classify_command() assigns each command a "test"/"lint" type used later
+#     by strategy evaluation.
+#   - eval executes raw command strings so shell syntax (pipes/redirection,
+#     compound commands, flags) works as authored.
+# Output/status capture:
+#   - Captures merged stdout/stderr via `2>&1` into `output`.
+#   - Stores numeric `exit_code` and derived boolean `passed` per command.
+#   - Persists the full check list plus overall `passed` decision in
+#     `.ralph/logs/validation/iter-${iteration}.json`.
+# Side effects/state:
+#   - Always creates `.ralph/logs/validation/` if missing.
+#   - Returns shell status 0/1 as the authoritative go/no-go signal consumed by
+#     ralph.sh to continue to commit flow or branch into retry handling.
 # Args: $1 = iteration number
 # Globals: RALPH_VALIDATION_COMMANDS (array), RALPH_VALIDATION_STRATEGY
 # Writes: .ralph/logs/validation/iter-${iteration}.json
@@ -180,8 +205,16 @@ evaluate_results() {
 }
 
 # Generate a failure context summary for the next iteration's retry prompt.
-# Extracts failed checks, truncates output to 500 chars each to stay within
-# the context budget (truncate_to_budget in context.sh handles further trimming).
+# Failure-context surfacing:
+#   - Reads `.ralph/logs/validation/iter-N.json` and filters failed checks.
+#   - Emits concise markdown bullets containing failed command + truncated error
+#     text so retries focus on actionable breakages.
+#   - Truncates each captured output to 500 chars to preserve prompt budget
+#     before additional trimming by context.sh utilities.
+# Side effects/state:
+#   - No file writes here; caller (ralph.sh) persists this output to
+#     `.ralph/context/failure-context.md`, which is then injected into the next
+#     retry prompt's failure section.
 # Args: $1 = path to validation result JSON file (iter-N.json)
 # Stdout: markdown formatted failure context for ## Failure Context section
 # CALLER: ralph.sh main loop, after validation failure, before saving to
