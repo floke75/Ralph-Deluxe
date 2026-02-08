@@ -28,7 +28,8 @@ set -euo pipefail
 # INPUTS / OUTPUTS / CRITICAL INVARIANTS:
 # - Inputs: task JSON, mode flag, failure context text, optional compacted context,
 #   files under .ralph/handoffs/, .ralph/knowledge-index.md, .ralph/skills/, and
-#   .ralph/templates/coding-prompt-footer.md.
+#   .ralph/templates/coding-prompt-footer.md and
+#   .ralph/templates/coding-prompt.md (fallback).
 # - Outputs: markdown prompt text for LLM submission; when truncating, also emits a
 #   trailing [[TRUNCATION_METADATA]] JSON line for tests/debugging.
 # - Invariants:
@@ -54,7 +55,8 @@ set -euo pipefail
 #   Depends on: jq, awk, log() from ralph.sh
 #   Reads files: .ralph/handoffs/handoff-NNN.json (most recent),
 #                .ralph/knowledge-index.md (in handoff-plus-index mode),
-#                .ralph/templates/coding-prompt-footer.md (output instructions),
+#                .ralph/templates/coding-prompt-footer.md (preferred output instructions),
+#                .ralph/templates/coding-prompt.md (fallback output instructions),
 #                .ralph/skills/*.md (per-task skill files)
 #   Globals read: RALPH_CONTEXT_BUDGET_TOKENS (default 8000)
 #
@@ -297,6 +299,7 @@ get_prev_handoff_summary() {
 #
 # Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
 # Stdout: formatted context string for ## Previous Handoff section
+# Fallback behavior: unknown mode logs a warning and defaults to handoff-only narrative
 # CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
 # Caller: build_coding_prompt_v2() for the parser-sensitive "## Previous Handoff" section.
 # Side effects: reads latest .ralph/handoffs/handoff-*.json; no filesystem writes.
@@ -526,8 +529,9 @@ retrieve_relevant_knowledge() {
 # Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context
 # Stdout: assembled prompt ready for truncation and CLI submission
 # CALLER: ralph.sh run_coding_cycle() (behind declare -f guard for v1 fallback)
-# Side effects: reads latest handoff JSON, knowledge index, and output-footer template;
+# Side effects: reads latest handoff JSON, knowledge index, and output-instructions templates;
 # does not write files.
+# Path behavior: resolves runtime files through ${RALPH_DIR:-.ralph} to avoid CWD-coupled lookup failures.
 # Why-specific behavior: keeps exact "##" header literals and order aligned with
 # truncate_to_budget() so section-aware parsing/trimming stays deterministic.
 build_coding_prompt_v2() {
