@@ -94,6 +94,42 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
+# Resolve the latest handoff path deterministically.
+# WHY: Avoid ls+glob edge cases under set -e/pipefail when no files match.
+_latest_handoff_file() {
+    local handoffs_dir="$1"
+    local latest=""
+
+    if [[ -d "$handoffs_dir" ]]; then
+        latest="$(find "$handoffs_dir" -maxdepth 1 -type f -name 'handoff-*.json' | sort -V | tail -1)"
+    fi
+
+    echo "$latest"
+}
+
+# Safe jq extraction helper for context files.
+# Args: $1=file, $2=jq filter, $3=default value (optional)
+# Stdout: jq output or default value when JSON parse/filter fails.
+_safe_jq_file() {
+    local json_file="$1"
+    local filter="$2"
+    local default_value="${3:-}"
+    local value=""
+
+    if [[ ! -f "$json_file" ]]; then
+        echo "$default_value"
+        return
+    fi
+
+    if ! value="$(jq -r "$filter" "$json_file" 2>/dev/null)"; then
+        log "warn" "Failed to parse JSON context from ${json_file}; using fallback content"
+        echo "$default_value"
+        return
+    fi
+
+    echo "$value"
+}
+
 # Approximate token count via chars / 4.
 # This is a rough heuristic used for budget decisions, not billing.
 estimate_tokens() {
@@ -164,6 +200,15 @@ truncate_to_budget() {
         accumulated_knowledge="$(_extract_section "ACCUMULATED_KNOWLEDGE")"
         skills="$(_extract_section "SKILLS")"
         output_instructions="$(_extract_section "OUTPUT_INSTRUCTIONS")"
+
+        # Defensive fallback: if parsing failed, preserve leading signal from the
+        # original prompt instead of rebuilding an almost-empty skeleton.
+        if [[ -z "$current_task" ]]; then
+            log "warn" "Section parser could not find '## Current Task'; falling back to raw truncation"
+            echo "${content:0:$max_chars}"
+            echo "[[TRUNCATION_METADATA]] {\"truncated_sections\":[\"parser-fallback\"],\"max_chars\":${max_chars},\"original_chars\":${current_chars}}" >&2
+            return
+        fi
 
         local truncated_sections=()
         local rebuilt over trim_by
@@ -269,21 +314,21 @@ get_prev_handoff_summary() {
     local handoffs_dir="${1:-.ralph/handoffs}"
 
     local latest
-    latest=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -V | tail -1)
+    latest="$(_latest_handoff_file "$handoffs_dir")"
 
     if [[ -z "$latest" ]]; then
         echo ""
         return
     fi
 
-    jq -r '{
+    _safe_jq_file "$latest" '{
         task: .task_completed.task_id,
         decisions: .architectural_notes,
         deviations: [.deviations[] | "\(.planned) → \(.actual): \(.reason)"],
         constraints: [.constraints_discovered[] | "\(.constraint): \(.workaround // .impact)"],
         failed: [.bugs_encountered[] | select(.resolved == false) | .description],
         unfinished: [.unfinished_business[] | "\(.item) (\(.priority))"]
-    }' "$latest"
+    }' ""
 }
 
 # Return context from the latest handoff, varying by operating mode.
@@ -309,7 +354,7 @@ get_prev_handoff_for_mode() {
     local mode="${2:-handoff-only}"
 
     local latest
-    latest=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -V | tail -1)
+    latest="$(_latest_handoff_file "$handoffs_dir")"
 
     if [[ -z "$latest" ]]; then
         echo ""
@@ -319,18 +364,18 @@ get_prev_handoff_for_mode() {
     case "$mode" in
         handoff-only)
             # Return the full freeform narrative — this IS the memory
-            jq -r '.freeform // empty' "$latest"
+            _safe_jq_file "$latest" '.freeform // empty' ""
             ;;
         handoff-plus-index)
             # Return freeform + structured L2 for richer tactical context
             local narrative
-            narrative=$(jq -r '.freeform // ""' "$latest")
+            narrative="$(_safe_jq_file "$latest" '.freeform // ""' "")"
             local l2
-            l2=$(jq -r '{
+            l2="$(_safe_jq_file "$latest" '{
                 task: (.task_completed.task_id // "unknown"),
                 decisions: (.architectural_notes // []),
                 constraints: [(.constraints_discovered // [])[] | "\(.constraint): \(.workaround // .impact // "no details")"]
-            }' "$latest")
+            }' '{}')"
             echo "${narrative}"
             echo ""
             echo "### Structured context from previous iteration"
@@ -338,7 +383,7 @@ get_prev_handoff_for_mode() {
             ;;
         *)
             log "warn" "Unknown mode '${mode}' in get_prev_handoff_for_mode; falling back to handoff-only"
-            jq -r '.freeform // empty' "$latest"
+            _safe_jq_file "$latest" '.freeform // empty' ""
             ;;
     esac
 }
@@ -353,7 +398,7 @@ get_earlier_l1_summaries() {
 
     # Sort newest-first, skip the most recent (covered by L2), take next 2
     local files
-    files=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -Vr | tail -n +2 | head -2)
+    files="$(find "$handoffs_dir" -maxdepth 1 -type f -name 'handoff-*.json' 2>/dev/null | sort -Vr | tail -n +2 | head -2)"
 
     if [[ -z "$files" ]]; then
         echo ""
@@ -560,11 +605,11 @@ ${failure_context}"
     local retrieved_memory_section="## Retrieved Memory
 No retrieved memory available."
     local latest_handoff
-    latest_handoff=$(ls -1 "${handoffs_dir}"/handoff-*.json 2>/dev/null | sort -V | tail -1 || true)
+    latest_handoff="$(_latest_handoff_file "$handoffs_dir")"
     if [[ -n "$latest_handoff" ]]; then
         local constraints decisions
-        constraints=$(jq -r '[.constraints_discovered[]? | "- " + .constraint + ": " + (.workaround // .impact // "no workaround recorded")] | join("\n")' "$latest_handoff")
-        decisions=$(jq -r '[.architectural_notes[]? | "- " + .] | join("\n")' "$latest_handoff")
+        constraints="$(_safe_jq_file "$latest_handoff" '[.constraints_discovered[]? | "- " + .constraint + ": " + (.workaround // .impact // "no workaround recorded")] | join("\n")' "")"
+        decisions="$(_safe_jq_file "$latest_handoff" '[.architectural_notes[]? | "- " + .] | join("\n")' "")"
         retrieved_memory_section="## Retrieved Memory
 ### Constraints
 ${constraints:-No constraints recorded.}
@@ -620,9 +665,11 @@ ${skills_content}"
     local output_instructions
     output_instructions="$(cat "${base_dir}/templates/coding-prompt-footer.md" 2>/dev/null)" || true
     if [[ -z "$output_instructions" ]]; then
+        log "warn" "Missing ${base_dir}/templates/coding-prompt-footer.md; falling back to coding-prompt.md"
         output_instructions="$(cat "${base_dir}/templates/coding-prompt.md" 2>/dev/null)" || true
     fi
     if [[ -z "$output_instructions" ]]; then
+        log "warn" "Missing output-instructions templates; using inline fallback instructions"
         output_instructions="## When You're Done
 
 After completing your implementation and verifying the acceptance criteria,
