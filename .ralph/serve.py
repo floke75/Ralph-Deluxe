@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
-"""
-serve.py — HTTP server for the Ralph Deluxe operator dashboard.
+"""serve.py — HTTP bridge between the dashboard UI and Ralph's file control plane.
 
-PURPOSE: Bridges the dashboard UI (dashboard.html) to the orchestrator's file-based
-control plane. Serves static files from the project root and exposes two POST endpoints
-for dashboard-to-orchestrator communication.
+Endpoints / served assets:
+  - GET /*: serves static assets from the repository root, including
+    .ralph/dashboard.html plus polled state files such as .ralph/state.json,
+    .ralph/progress-log.json, .ralph/handoffs/*.json, and .ralph/logs/events.jsonl.
+  - POST /api/command: accepts a JSON command object from the dashboard and appends it
+    to .ralph/control/commands.json.
+  - POST /api/settings: accepts a JSON object of setting updates and applies only
+    whitelisted keys in .ralph/config/ralph.conf.
 
-ARCHITECTURE:
-  dashboard.html (browser) → HTTP POST → serve.py → writes files → orchestrator reads files
-  orchestrator writes state/handoffs → serve.py serves as static files → dashboard polls
+Files read / written for control and config:
+  - Reads: repository files requested by the browser via static GET.
+  - Writes: .ralph/control/commands.json (pending operator commands queue),
+    .ralph/config/ralph.conf (whitelisted setting updates).
+  - Writes are atomic (temp-file + os.replace) so orchestrator readers never observe
+    partially-written JSON/config content.
 
-ENDPOINTS:
-    GET  /*              — Static file serving from project root
-    POST /api/command    — Enqueue operator command to .ralph/control/commands.json
-    POST /api/settings   — Update whitelisted settings in .ralph/config/ralph.conf
-
-CONCURRENCY SAFETY:
-  The orchestrator and this server may access the same files concurrently.
-  All writes use atomic write-to-temp-then-rename (via atomic_write()) to prevent
-  the orchestrator from reading partially-written files.
-
-SECURITY:
-  - Settings updates are restricted to ALLOWED_SETTINGS whitelist
-  - Setting values must match ^[a-zA-Z0-9_-]+$ (no injection risk)
-  - Binds to 127.0.0.1 by default (no external access)
-
-DEPENDENCIES:
-    Read by: dashboard.html (polls every 3s)
-    Writes: .ralph/control/commands.json (operator commands for telemetry.sh to process)
-            .ralph/config/ralph.conf (settings updates)
-    Reads: project root directory tree (static file serving)
+Polling / interaction expectations:
+  - dashboard.html polls state and log files on a recurring cadence (currently 3s)
+    via GET requests served by this process.
+  - The dashboard sends operator actions via POST /api/command; the orchestrator is
+    expected to consume and clear queued commands from .ralph/control/commands.json.
+  - Settings edits flow dashboard -> POST /api/settings -> .ralph/config/ralph.conf,
+    where orchestrator/runtime components may re-read config as needed.
 """
 
 import argparse
