@@ -356,14 +356,15 @@ run_compaction_cycle() {
 # core of what Ralph does each iteration.
 # CALLER: main loop step 4
 # SIDE EFFECT: Creates handoff file, updates compaction counters in state.json,
-#              cleans up temp skills file.
+#              cleans up temp skills file, deletes failure context file on success.
 # Returns: 0 + handoff_file path on stdout, or 1 on failure
-# Depends on: prepare_skills_file(), format_compacted_context() [context.sh],
-#             get_prev_handoff_summary(), get_earlier_l1_summaries() [context.sh],
+# Depends on: prepare_skills_file() [context.sh],
 #             build_coding_prompt_v2() or build_coding_prompt() [context.sh],
 #             truncate_to_budget(), estimate_tokens() [context.sh],
 #             run_coding_iteration(), parse_handoff_output(), save_handoff(),
 #             extract_response_metadata() [cli-ops.sh]
+#   v1 fallback only: format_compacted_context(), get_prev_handoff_summary(),
+#             get_earlier_l1_summaries() [context.sh]
 run_coding_cycle() {
     local task_json="$1"
     local current_iteration="$2"

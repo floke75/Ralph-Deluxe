@@ -222,7 +222,7 @@ evaluate_results() {
 #     `.ralph/context/failure-context.md`, which is then injected into the next
 #     retry prompt's failure section.
 # Args: $1 = path to validation result JSON file (iter-N.json)
-# Stdout: markdown formatted failure context for ## Failure Context section
+# Stdout: markdown formatted failure context (### header, placed inside ## Failure Context)
 # CALLER: ralph.sh main loop, after validation failure, before saving to
 #   .ralph/context/failure-context.md
 generate_failure_context() {

@@ -215,7 +215,7 @@ truncate_to_budget() {
                 failure_context=""
                 [[ " ${truncated_sections[*]} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
             else
-                # Last-resort: hard truncate from end, preserving task ID/title at the beginning
+                # Last-resort: hard truncate to budget, keeping content from the beginning
                 rebuilt="${rebuilt:0:$max_chars}"
                 [[ " ${truncated_sections[*]} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
                 break
@@ -296,7 +296,8 @@ get_prev_handoff_summary() {
 #   memory, freeing the handoff to focus on recent tactical context.
 #
 # Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
-# Stdout: formatted context string for ## Previous Handoff section
+# Stdout: formatted context string for ## Previous Handoff section, or empty string
+#   when no handoff files exist (caller treats empty as "first iteration")
 # Fallback behavior: unknown mode logs a warning and defaults to handoff-only narrative
 # CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
 # Caller: build_coding_prompt_v2() for the parser-sensitive "## Previous Handoff" section.
@@ -414,7 +415,7 @@ format_compacted_context() {
 # Used in handoff-plus-index mode to inject task-relevant context.
 #
 # HOW RELEVANCE WORKS:
-# 1. Extract keywords from task id, title, description, and libraries array
+# 1. Extract keywords from task id, title, description (min 2 chars), and libraries array
 # 2. Search knowledge-index.md via awk, matching keywords against each line
 # 3. Lines are tagged by their category heading (Constraints, Patterns, etc.)
 # 4. Results sorted by category priority, then line order

@@ -241,15 +241,16 @@ extract_l1() {
 # L2 — Key decisions object (~200-500 tokens). Used for previous iteration context.
 # Args: $1 = handoff file path
 # Stdout: JSON object with task, decisions, deviations, constraints, failed, unfinished
+# Null-safety: optional fields use // fallbacks to avoid "null" string in output
 extract_l2() {
     local handoff_file="$1"
     jq -r '{
-        task: .task_completed.task_id,
-        decisions: .architectural_notes,
-        deviations: [.deviations[] | "\(.planned) → \(.actual): \(.reason)"],
-        constraints: [.constraints_discovered[] | "\(.constraint): \(.workaround // .impact)"],
-        failed: [.bugs_encountered[] | select(.resolved == false) | .description],
-        unfinished: [.unfinished_business[] | "\(.item) (\(.priority))"]
+        task: (.task_completed.task_id // "unknown"),
+        decisions: (.architectural_notes // []),
+        deviations: [(.deviations // [])[] | "\(.planned) → \(.actual): \(.reason)"],
+        constraints: [(.constraints_discovered // [])[] | "\(.constraint): \(.workaround // .impact // "no details")"],
+        failed: [(.bugs_encountered // [])[] | select(.resolved == false) | .description],
+        unfinished: [(.unfinished_business // [])[] | "\(.item) (\(.priority))"]
     }' "$handoff_file"
 }
 
