@@ -51,3 +51,34 @@ Append new entries for iterations not already present. Keep existing entries int
 - Prefer precision over completeness — only index genuinely useful knowledge
 - Tags should be lowercase, hyphenated, 1-2 words each
 - One line per entry in the markdown file
+
+## Post-Output Verification Rules
+
+Your output will be automatically verified by `verify_knowledge_indexes()` in `compaction.sh`. If any check fails, your changes are rolled back to the pre-indexer snapshot. Follow these rules to pass verification:
+
+### 1. Header format (verify_knowledge_index_header)
+The `.ralph/knowledge-index.md` MUST start with:
+```
+# Knowledge Index
+Last updated: iteration N (timestamp)
+```
+Both lines are required. The iteration number must be a digit.
+
+### 2. Hard constraint preservation (verify_hard_constraints_preserved)
+Any line under `## Constraints` in the PREVIOUS index that contains `must`, `must not`, or `never` (case-insensitive) MUST either:
+- Appear identically in the new index, OR
+- Be superseded: a new entry must contain `[supersedes: K-<type>-<slug>]` where `K-<type>-<slug>` is the memory ID from the old constraint line
+
+Do NOT silently drop hard constraints. If a constraint is obsolete, write a replacement entry with an explicit `[supersedes: ...]` tag.
+
+### 3. JSON append-only (verify_json_append_only)
+The `.ralph/knowledge-index.json` array:
+- Must be >= the previous array length (no entry removal)
+- Must preserve all previous entries exactly (byte-identical)
+- Must have unique `iteration` values (no duplicates)
+- Each entry must have: `iteration` (number), `task` (string), `summary` (string), `tags` (array)
+
+### 4. ID consistency (verify_knowledge_index)
+In `.ralph/knowledge-index.json`:
+- No two `active` entries may share the same `memory_id`
+- Every ID in a `supersedes` array must exist as a `memory_id` somewhere in the JSON array
