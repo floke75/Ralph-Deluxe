@@ -3,90 +3,33 @@
 set -euo pipefail
 
 ###############################################################################
-# ralph.sh — Main orchestrator for Ralph Deluxe
+# ralph.sh — Main orchestration entrypoint
 #
-# PURPOSE:
-#   Drives Claude Code CLI through a structured task plan (plan.json). Each
-#   coding iteration produces a freeform handoff narrative that becomes the
-#   primary context for the next iteration, creating a chain of LLM-to-LLM
-#   briefings. The orchestrator wraps each iteration in a git checkpoint so
-#   failed validations can be atomically rolled back.
+# ORCHESTRATION PHASES (high level):
+#   startup -> iterate tasks -> finalize.
+#   - startup: parse CLI/config, resolve mode precedence, source runtime modules,
+#     initialize telemetry/progress hooks, and verify clean git state.
+#   - iterate: select next runnable task, optionally run compaction/indexing,
+#     checkpoint git, run coding cycle, gate on validation, then either commit
+#     and advance or rollback and re-queue/fail the task.
+#   - finalize: persist terminal status (complete/blocked/max-iterations/
+#     interrupted), emit final telemetry, and exit.
 #
-# DEPENDENCIES:
-#   Sourced modules (.ralph/lib/):
-#     cli-ops.sh    — run_coding_iteration(), run_memory_iteration(),
-#                     parse_handoff_output(), save_handoff(), extract_response_metadata()
-#     context.sh    — build_coding_prompt_v2(), truncate_to_budget(), estimate_tokens(),
-#                     load_skills(), get_prev_handoff_summary(), get_prev_handoff_for_mode(),
-#                     get_earlier_l1_summaries(), format_compacted_context(),
-#                     retrieve_relevant_knowledge()
-#     validation.sh — run_validation(), generate_failure_context()
-#     git-ops.sh    — create_checkpoint(), rollback_to_checkpoint(),
-#                     commit_iteration(), ensure_clean_state()
-#     plan-ops.sh   — get_next_task(), set_task_status(), apply_amendments(),
-#                     is_plan_complete(), count_remaining_tasks()
-#     compaction.sh — check_compaction_trigger(), run_knowledge_indexer(),
-#                     build_compaction_input(), update_compaction_state(), extract_l1()
-#     telemetry.sh  — emit_event(), init_control_file(), check_and_handle_commands()
-#     progress-log.sh — init_progress_log(), append_progress_entry()
+# MODULE SOURCING & DEPENDENCIES:
+#   This file owns cross-module sequencing and state transitions only.
+#   It sources .ralph/lib/*.sh after config load so modules read resolved config
+#   globals at source time. Module internals (prompt assembly, validation
+#   implementation, compaction heuristics, git primitives, plan mutation, etc.)
+#   are documented in those module headers and intentionally not duplicated here.
 #
-#   External tools: jq, git, claude CLI, date, wc, mktemp
-#   Config files:   .ralph/config/ralph.conf (shell-sourced key=value)
-#   Templates:      .ralph/templates/{coding-prompt.md, memory-prompt.md,
-#                   knowledge-index-prompt.md, first-iteration.md,
-#                   coding-prompt-footer.md}
+# SIGNALS & SHUTDOWN:
+#   SIGINT/SIGTERM route through shutdown_handler(), which marks state as
+#   interrupted, emits an end event when telemetry is available, and exits 130.
+#   A reentrancy guard prevents double cleanup if multiple signals arrive.
 #
-# DATA FLOW (per iteration):
-#   plan.json --[get_next_task]--> task_json
-#     --> build_coding_prompt_v2() assembles 8-section prompt
-#       --> truncate_to_budget() trims to RALPH_CONTEXT_BUDGET_TOKENS
-#         --> run_coding_iteration() pipes prompt to claude CLI
-#           --> parse_handoff_output() double-parses response envelope
-#             --> save_handoff() writes .ralph/handoffs/handoff-NNN.json
-#               --> run_validation() runs configured checks
-#                 --> commit_iteration() or rollback_to_checkpoint()
-#
-# STATE MANAGEMENT (.ralph/state.json):
-#   Persists across iterations and restarts. Key fields:
-#     current_iteration              — monotonic counter, drives handoff file naming
-#     status                         — running|complete|interrupted|blocked|max_iterations_reached
-#     mode                           — handoff-only|handoff-plus-index
-#     last_task_id                   — for resume context
-#     coding_iterations_since_compaction — drives periodic compaction trigger
-#     total_handoff_bytes_since_compaction — drives byte-threshold compaction trigger
-#     last_compaction_iteration      — reset point for compaction counters
-#   All writes use temp-file-then-rename via write_state() for atomicity.
-#
-# OPERATING MODES:
-#   handoff-only (default):
-#     The freeform handoff narrative IS the memory. No knowledge indexer runs.
-#     Simpler, lower cost, sufficient for short-to-medium task plans.
-#   handoff-plus-index:
-#     Adds a periodic knowledge indexer (compaction.sh) that distills handoff
-#     data into .ralph/knowledge-index.{md,json}. Prompt includes keyword-matched
-#     retrieval from the index. Better for long plans where narrative alone
-#     would lose early decisions. Indexer runs are trigger-gated (metadata,
-#     novelty, bytes, periodic) and post-verified with rollback on failure.
-#   Priority: CLI --mode > RALPH_MODE in ralph.conf > default "handoff-only"
-#
-# MAIN LOOP STEPS (numbered, matching code comments):
-#   1. Check compaction trigger (handoff-plus-index only) → run_knowledge_indexer()
-#   2. Mark task in_progress in plan.json
-#   3. Create git checkpoint (SHA stored for potential rollback)
-#   4. Run coding cycle: prompt assembly → CLI invocation → parse → save handoff
-#   5. Run validation gate (configured commands + strategy)
-#   6a. On validation pass: commit, mark done, update progress log
-#   6b. On validation fail: rollback to checkpoint, increment retry, save failure context
-#   7. Apply plan amendments from handoff (add/modify/remove tasks)
-#   8. Rate-limit delay between iterations
-#
-# SIGNAL HANDLING:
-#   SIGINT/SIGTERM → shutdown_handler() saves state as "interrupted", exits 130.
-#   Reentrant guard prevents double-shutdown during cleanup.
-#
-# TESTING:
-#   The `if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi` guard at
-#   EOF allows bats tests to source this file without triggering main().
+# TESTABILITY:
+#   main() is guarded at EOF so tests can source this file without running the
+#   loop, then invoke helpers directly.
 ###############################################################################
 
 ###############################################################################
@@ -741,7 +684,9 @@ main() {
         # === REAL MODE ===
 
         # Step 1: Knowledge indexing check (handoff-plus-index mode only)
-        # MODE BRANCH: In handoff-only mode this entire block is skipped.
+        # Control-flow integration point: this is the only pre-task branch that
+        # can inject compaction work before checkpoint+coding; failure is non-fatal
+        # so task execution remains forward-progressing.
         # The trigger evaluation (compaction.sh) checks 4 conditions in priority
         # order: task metadata > novelty > bytes > periodic.
         if [[ "$MODE" == "handoff-plus-index" ]]; then
@@ -770,10 +715,13 @@ main() {
         if ! handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")"; then
             log "error" "Coding cycle failed for $task_id"
             rollback_to_checkpoint "$checkpoint"
+            # Retry transition: return task to pending before `continue` so the
+            # scheduler can pick it again on the next loop pass.
             set_task_status "$PLAN_FILE" "$task_id" "pending"
             increment_retry_count "$PLAN_FILE" "$task_id"
 
-            # Check if task has exhausted its retry budget
+            # Retry gate: if the budget is spent, convert retry intent to terminal
+            # failure so the loop does not spin indefinitely on this task.
             local retry_count max_retries
             retry_count="$(echo "$task_json" | jq -r '.retry_count // 0')"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
@@ -791,6 +739,8 @@ main() {
         fi
 
         # Step 5: Run validation gate
+        # Branch point: pass path commits + advances plan; fail path rolls back and
+        # feeds retry context into the next attempt.
         # Validation strategy (strict/lenient/tests_only) is set in ralph.conf.
         # Results written to .ralph/logs/validation/iter-N.json for failure context.
         if run_validation "$current_iteration"; then
@@ -850,6 +800,8 @@ main() {
             retry_count="$(echo "$task_json" | jq -r '.retry_count // 0')"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
 
+            # Validation-fail retry branch: terminalize when budget is exhausted,
+            # otherwise requeue by setting pending.
             if (( retry_count >= max_retries )); then
                 log "error" "Task $task_id exceeded max retries ($max_retries), marking failed"
                 set_task_status "$PLAN_FILE" "$task_id" "failed"
