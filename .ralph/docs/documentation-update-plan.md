@@ -68,14 +68,16 @@ Templates and config files need only a brief header comment explaining their pur
 
 | File | Header Comment | Status |
 |------|:---:|:---:|
-| `.ralph/templates/coding-prompt.md` | Required | Pending |
-| `.ralph/templates/knowledge-index-prompt.md` | Required | Pending |
-| `.ralph/templates/knowledge-index-system.md` | Required | Pending |
-| `.ralph/config/ralph.conf` | Required | Pending |
+| `.ralph/templates/coding-prompt.md` | Required | Done |
+| `.ralph/templates/first-iteration.md` | Required | Done |
+| `.ralph/templates/knowledge-index-prompt.md` | Required | Done |
+| `.ralph/templates/memory-prompt.md` | Required | Done |
+| `.ralph/config/ralph.conf` | Required | Done |
 | `.ralph/config/handoff-schema.json` | N/A (JSON) | Skip |
 | `.ralph/config/mcp-coding.json` | N/A (JSON) | Skip |
 | `.ralph/config/mcp-memory.json` | N/A (JSON) | Skip |
-| `.ralph/dashboard.html` | Required (HTML comment) | Pending |
+| `.ralph/config/memory-output-schema.json` | N/A (JSON) | Skip |
+| `.ralph/dashboard.html` | Required (HTML comment) | Done |
 
 ### Group 7 — Test Files (documentation-light)
 
@@ -83,16 +85,17 @@ Test files need only a file-level comment explaining what module they test and a
 
 | File | Header Comment | Status |
 |------|:---:|:---:|
-| `tests/context.bats` | Required | Pending |
-| `tests/compaction.bats` | Required | Pending |
-| `tests/plan-ops.bats` | Required | Pending |
-| `tests/validation.bats` | Required | Pending |
-| `tests/integration.bats` | Required | Pending |
-| `tests/cli-ops.bats` | Required | Pending |
-| `tests/git-ops.bats` | Required | Pending |
-| `tests/telemetry.bats` | Required | Pending |
-| `tests/progress-log.bats` | Required | Pending |
-| `tests/ralph.bats` | Required | Pending |
+| `tests/context.bats` | Required | Done |
+| `tests/compaction.bats` | Required | Done |
+| `tests/plan-ops.bats` | Required | Done |
+| `tests/validation.bats` | Required | Done |
+| `tests/integration.bats` | Required | Done |
+| `tests/cli-ops.bats` | Required | Done |
+| `tests/git-ops.bats` | Required | Done |
+| `tests/telemetry.bats` | Required | Done |
+| `tests/progress-log.bats` | Required | Done |
+| `tests/error-handling.bats` | Required | Done |
+| `tests/test_helper/common.sh` | Required (script header) | Done |
 
 ## Handling New Files
 
@@ -132,7 +135,7 @@ Phase 2: Group 3 (2 files, sequential — context.sh before compaction.sh)
   ↓ gate: cross-reference review
 Phase 3: Groups 4-5 (4 files, all parallel)
   ↓ gate: full test suite
-Phase 4: Groups 6-7 (14 files, all parallel — lightweight headers only)
+Phase 4: Groups 6-7 (21 files, all parallel — lightweight headers only)
   ↓ gate: final test suite
 ```
 
@@ -159,6 +162,13 @@ CLAUDE.md is loaded into every LLM system prompt. Keep it under 200 lines of den
 - Can an existing table absorb the information? (Prefer combined tables)
 - Is this reference material that belongs in a separate doc? (Link from CLAUDE.md, don't inline)
 - Does every sentence add information the LLM cannot get from code? (Delete if no)
+
+
+## Maintenance Notes (Post-Merge Coordination)
+
+- Keep this file and `CLAUDE.md` as the only coordination docs edited in the post-merge documentation sweep to minimize conflict churn.
+- When adding new template/config/test artifacts, update Group 6/7 tables in the same commit as the file addition if possible.
+- Legacy memory-compaction assets (`.ralph/templates/memory-prompt.md`, `.ralph/config/memory-output-schema.json`, `.ralph/memory.jsonl`) remain documented for compatibility and should not be removed from inventory until the legacy path is deleted.
 
 ## Maintenance Schedule
 
