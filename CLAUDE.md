@@ -1,154 +1,190 @@
 # Ralph Deluxe — Project Conventions
 
-## Overview
-Ralph Deluxe is a bash orchestrator that drives Claude Code CLI through structured task plans. Each coding iteration writes a freeform handoff narrative that becomes the primary context for the next iteration. The orchestrator supports two modes: `handoff-only` (default) and `handoff-plus-index` (adds a periodic knowledge indexer). It includes git-backed rollback, validation gates, telemetry, and an operator dashboard.
+## What This Is
+
+Bash orchestrator that drives Claude Code CLI through structured task plans. Each coding iteration writes a freeform handoff narrative that becomes the primary context for the next iteration. Two modes: `handoff-only` (default) and `handoff-plus-index` (adds periodic knowledge indexing).
+
+## Architecture Overview
+
+```
+plan.json → ralph.sh main loop → for each task:
+  1. get_next_task()           [plan-ops.sh]    — select task with deps satisfied
+  2. check_compaction_trigger() [compaction.sh]  — h+i mode: maybe run indexer
+  3. create_checkpoint()       [git-ops.sh]     — save HEAD for rollback
+  4. build_coding_prompt_v2()  [context.sh]     — assemble 8-section prompt
+  5. run_coding_iteration()    [cli-ops.sh]     — invoke claude CLI
+  6. parse_handoff_output()    [cli-ops.sh]     — extract handoff from response
+  7. run_validation()          [validation.sh]  — run test/lint commands
+  8a. PASS: commit + log + apply_amendments
+  8b. FAIL: rollback + generate_failure_context → retry
+```
+
+## Module Dependency Map
+
+```
+ralph.sh (main) ─── sources all .ralph/lib/*.sh modules
+  ├── context.sh      — prompt assembly, truncation, knowledge retrieval
+  ├── compaction.sh   — triggers, indexer, verification (calls cli-ops.sh)
+  ├── cli-ops.sh      — claude CLI invocation, handoff parsing
+  ├── validation.sh   — post-iteration test/lint gate
+  ├── plan-ops.sh     — task selection, amendments, plan mutation
+  ├── git-ops.sh      — checkpoint/rollback/commit
+  ├── telemetry.sh    — event stream, operator control commands
+  └── progress-log.sh — auto-generated progress logs (calls plan-ops.sh)
+
+serve.py (HTTP) ←→ dashboard.html (polls every 3s)
+  Writes: .ralph/control/commands.json (read by telemetry.sh)
+  Writes: .ralph/config/ralph.conf (read by ralph.sh)
+```
 
 ## Directory Structure
-- `.ralph/ralph.sh` — Main orchestrator script
-- `.ralph/lib/` — Helper modules (cli-ops.sh, context.sh, validation.sh, git-ops.sh, plan-ops.sh, compaction.sh, telemetry.sh, progress-log.sh)
-- `.ralph/config/` — JSON configs and schemas (ralph.conf, handoff-schema.json, mcp-*.json)
-- `.ralph/templates/` — Prompt templates (coding-prompt.md, memory-prompt.md, knowledge-index-prompt.md, first-iteration.md)
-- `.ralph/skills/` — Per-task skill injection files (markdown)
-- `.ralph/handoffs/` — Raw handoff JSON from each iteration
-- `.ralph/context/` — Legacy compacted context files
-- `.ralph/control/` — Dashboard-to-orchestrator command queue (commands.json)
-- `.ralph/logs/` — Orchestrator logs (ralph.log, events.jsonl, amendments.log, validation/)
-- `.ralph/dashboard.html` — Single-file operator dashboard
-- `.ralph/serve.py` — HTTP server for dashboard (static files + control plane POST endpoints)
-- `.ralph/knowledge-index.md` — Categorized knowledge index (handoff-plus-index mode)
-- `.ralph/knowledge-index.json` — Iteration-keyed index for dashboard (handoff-plus-index mode)
-- `.ralph/progress-log.md` — Auto-generated progress log (human/LLM-readable)
-- `.ralph/progress-log.json` — Auto-generated progress log (dashboard-readable)
-- `.ralph/state.json` — Orchestrator runtime state (current iteration, mode, compaction counters)
-- `plan.json` — Task plan (project root for visibility)
-- `tests/` — bats-core test suite
+
+| Path | Purpose |
+|------|---------|
+| `.ralph/ralph.sh` | Main orchestrator — state machine, main loop, signal handling |
+| `.ralph/lib/*.sh` | 8 library modules (sourced by ralph.sh) |
+| `.ralph/config/ralph.conf` | Runtime config (mode, thresholds, validation commands) |
+| `.ralph/config/handoff-schema.json` | JSON schema for coding iteration output |
+| `.ralph/config/mcp-coding.json` | MCP config for coding iterations |
+| `.ralph/config/mcp-memory.json` | MCP config for memory/indexer iterations |
+| `.ralph/templates/` | Prompt templates (coding-prompt.md, knowledge-index-prompt.md, etc.) |
+| `.ralph/skills/` | Per-task skill injection files (matched by task.skills[] array) |
+| `.ralph/handoffs/` | Raw handoff JSON per iteration (handoff-001.json, etc.) |
+| `.ralph/control/commands.json` | Dashboard→orchestrator command queue |
+| `.ralph/logs/events.jsonl` | Append-only JSONL telemetry stream |
+| `.ralph/logs/validation/` | Per-iteration validation results (iter-N.json) |
+| `.ralph/state.json` | Runtime state: iteration, mode, status, compaction counters |
+| `.ralph/knowledge-index.md` | Categorized knowledge index (h+i mode) |
+| `.ralph/knowledge-index.json` | Iteration-keyed index for dashboard (h+i mode) |
+| `.ralph/progress-log.{md,json}` | Auto-generated progress logs |
+| `.ralph/dashboard.html` | Single-file operator dashboard (vanilla JS + Tailwind) |
+| `.ralph/serve.py` | HTTP server for dashboard |
+| `plan.json` | Task plan (project root) |
+| `tests/*.bats` | bats-core test suite (one file per module) |
 
 ## Operating Modes
-- `handoff-only` (default): The freeform handoff narrative IS the memory. No compaction or indexing runs
-- `handoff-plus-index`: Handoff narrative + periodic knowledge indexer that maintains categorized `.ralph/knowledge-index.md` and `.ralph/knowledge-index.json`
-- Mode set via `--mode` CLI flag, `RALPH_MODE` in ralph.conf, or dashboard settings panel
-- Priority: CLI flag > config file > default (`handoff-only`)
 
-## Handoff Schema
-- `summary` (string, required) — One-line description of what was accomplished
-- `freeform` (string, required) — Full narrative briefing for the next iteration (the most important field)
-- Plus structured fields: task_completed, deviations, bugs_encountered, architectural_notes, constraints_discovered, files_touched, plan_amendments, tests_added, unfinished_business, recommendations
+| Mode | Memory Strategy | Prompt Sections | Compaction |
+|------|----------------|-----------------|------------|
+| `handoff-only` (default) | Freeform narrative only | 1-4, 7-8 | None |
+| `handoff-plus-index` | Narrative + knowledge index | All 8 | Triggered |
 
-## Context Engineering (context.sh)
+Mode priority: `--mode` CLI flag > `RALPH_MODE` in ralph.conf > default (`handoff-only`)
 
-### Prompt Structure — `build_coding_prompt_v2()`
-Assembles 8 sections in this exact order. Section headers are `## <Name>` and must match exactly for truncation to work.
+## The 8-Section Prompt (`build_coding_prompt_v2` in context.sh)
 
-| # | Section | Source | Present When |
-|---|---------|--------|--------------|
-| 1 | `## Current Task` | task JSON from plan.json | Always |
-| 2 | `## Failure Context` | previous validation output | Retry iterations only |
-| 3 | `## Retrieved Memory` | latest handoff: constraints + decisions; in h+i mode also pointer to knowledge-index.md | Always (content varies by mode) |
-| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` — freeform-only in `handoff-only`; freeform + structured L2 (deviations, failed bugs, unfinished business) in `handoff-plus-index` | Iteration 2+ |
-| 5 | `## Retrieved Project Memory` | `retrieve_relevant_knowledge()` — top-k keyword-matched entries from knowledge-index.md | `handoff-plus-index` mode + index file exists + matches found |
-| 6 | `## Accumulated Knowledge` | Static pointer to `.ralph/knowledge-index.md` | `handoff-plus-index` mode + index file exists |
-| 7 | `## Skills` | Skill files from `.ralph/skills/` matched by task's `skills` array | When task has skills |
-| 8 | `## Output Instructions` | `.ralph/templates/coding-prompt-footer.md` or inline fallback | Always |
+Section headers MUST be `## <Name>` exactly — the truncation awk parser matches these.
 
-### Knowledge Retrieval — `retrieve_relevant_knowledge()`
-- Location: `context.sh:291`
-- Extracts keywords from task id, title, description, and libraries
-- Searches `knowledge-index.md` via awk with category priority: Constraints (1) > Architectural Decisions (2) > Unresolved (3) > Gotchas (4) > Patterns (5)
-- Returns max 12 lines sorted by category priority then line order
-- Injected into `## Retrieved Project Memory` section — NOT just a pointer
+| # | Section | Source | Present When | Truncation Priority |
+|---|---------|--------|--------------|---------------------|
+| 1 | `## Current Task` | plan.json task | Always | 8 (last resort) |
+| 2 | `## Failure Context` | validation output | Retry only | 7 |
+| 3 | `## Retrieved Memory` | latest handoff constraints + decisions | Always | 6 (min 17 chars) |
+| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` | Iteration 2+ | 4 (min 18 chars) |
+| 5 | `## Retrieved Project Memory` | `retrieve_relevant_knowledge()` | h+i mode + matches found | 5 |
+| 6 | `## Accumulated Knowledge` | Static pointer to knowledge-index.md | h+i mode + index exists | 1 (removed first) |
+| 7 | `## Skills` | `.ralph/skills/<name>.md` | Task has skills[] | 2 |
+| 8 | `## Output Instructions` | Template file or inline fallback | Always | 3 (min 22 chars) |
 
-### Section-Aware Truncation — `truncate_to_budget()`
-- Location: `context.sh:25`
-- Splits prompt into 8 named sections via a single awk pass on `## ` headers
-- Truncation priority (lowest priority trimmed first):
-  1. Accumulated Knowledge (just a pointer — removed entirely)
-  2. Skills (trimmed from end)
-  3. Output Instructions (trimmed from end, min 22 chars kept)
-  4. Previous Handoff (trimmed from end, min 18 chars kept)
-  5. Retrieved Project Memory (trimmed from end)
-  6. Retrieved Memory (trimmed from end, min 17 chars kept)
-  7. Failure Context (trimmed from end)
-  8. Current Task (last resort — hard truncate)
-- Budget: `RALPH_CONTEXT_BUDGET_TOKENS` (default 8000) * 4 chars/token
+**CRITICAL**: `build_coding_prompt_v2()` must pass `$mode` (not a hardcoded string) to `get_prev_handoff_for_mode()`. Tests verify this.
 
-### Mode-Sensitive Handoff Retrieval — `get_prev_handoff_for_mode()`
+### Mode-Sensitive Handoff Retrieval
+
 - `handoff-only`: Returns freeform narrative only
-- `handoff-plus-index`: Returns freeform narrative + structured L2 block (deviations, failed bugs, constraints, unfinished business) under a "Structured context from previous iteration" subheader
-- CRITICAL: `build_coding_prompt_v2()` must pass `$mode` (not a hardcoded string) to this function
+- `handoff-plus-index`: Returns freeform + structured L2 (deviations, constraints, decisions) under "### Structured context from previous iteration"
 
-## Knowledge Indexer (compaction.sh)
+### Knowledge Retrieval (`retrieve_relevant_knowledge` in context.sh)
 
-### Compaction Triggers — `check_compaction_trigger()`
-4 triggers evaluated in priority order (first match wins):
-1. **Task metadata** — `needs_docs == true` or `libraries` array non-empty
-2. **Semantic novelty** — term overlap between next task and recent handoff summaries < `RALPH_NOVELTY_OVERLAP_THRESHOLD` (default 0.25). Uses `build_task_term_signature()` + `build_recent_handoff_term_signature()` + `calculate_term_overlap()`
-3. **Byte threshold** — `total_handoff_bytes_since_compaction` > `RALPH_COMPACTION_THRESHOLD_BYTES` (default 32000)
-4. **Periodic** — `coding_iterations_since_compaction` >= `RALPH_COMPACTION_INTERVAL` (default 5)
+Extracts keywords from task metadata → searches knowledge-index.md via awk → returns max 12 lines sorted by category priority: Constraints (1) > Architectural Decisions (2) > Unresolved (3) > Gotchas (4) > Patterns (5). Injected into `## Retrieved Project Memory` section.
 
-### Post-Indexing Verification — `verify_knowledge_indexes()`
-Runs 4 checks after every indexer pass. On any failure, restores pre-indexer snapshots.
+## Knowledge Indexer (compaction.sh) — h+i mode only
 
-| Check | Function | Invariant |
-|-------|----------|-----------|
-| Header format | `verify_knowledge_index_header()` | `# Knowledge Index` + `Last updated: iteration N (...)` |
-| Hard constraints | `verify_hard_constraints_preserved()` | Lines matching `must/must not/never` under `## Constraints` must be preserved OR superseded via `[supersedes: K-<type>-<slug>]` |
-| JSON append-only | `verify_json_append_only()` | New JSON array >= old length, no old entries removed, no duplicate iterations |
-| ID consistency | `verify_knowledge_index()` | No duplicate active `memory_ids`; all `supersedes` references target existing IDs |
+### Compaction Triggers (first match wins)
+
+1. **Task metadata** — `needs_docs == true` or `libraries[]` non-empty
+2. **Semantic novelty** — term overlap < `RALPH_NOVELTY_OVERLAP_THRESHOLD` (0.25)
+3. **Byte threshold** — accumulated bytes > `RALPH_COMPACTION_THRESHOLD_BYTES` (32000)
+4. **Periodic** — iterations since compaction >= `RALPH_COMPACTION_INTERVAL` (5)
+
+### Post-Indexer Verification (all must pass or rollback)
+
+| Check | Invariant |
+|-------|-----------|
+| `verify_knowledge_index_header()` | `# Knowledge Index` + `Last updated: iteration N (...)` |
+| `verify_hard_constraints_preserved()` | `must/must not/never` lines under `## Constraints` preserved or superseded via `[supersedes: K-<type>-<slug>]` |
+| `verify_json_append_only()` | Array length >= old, no entries removed, no duplicate iterations |
+| `verify_knowledge_index()` | No duplicate active `memory_ids`; all `supersedes` targets exist |
 
 ### Memory ID Format
-- Pattern: `K-<type>-<slug>` (e.g., `K-constraint-no-force-push`, `K-decision-tag-checkpoints`)
-- Types: `constraint`, `decision`, `pattern`, `gotcha`, `unresolved`
-- Supersession: `[supersedes: K-<type>-<slug>]` inline in the new entry
-- Provenance: `[source: iter N,M]` inline in each entry
-- Both formats are checked by verification and consumed by `retrieve_relevant_knowledge()`
 
-### Configuration Variables
-| Variable | Default | Location | Description |
-|----------|---------|----------|-------------|
-| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | context.sh / ralph.conf | Token budget for assembled prompts |
-| `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | compaction.sh / ralph.conf | Term overlap ratio below which novelty trigger fires |
-| `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | compaction.sh / ralph.conf | Number of recent handoffs for novelty comparison |
-| `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | compaction.sh / ralph.conf | Byte threshold trigger |
-| `RALPH_COMPACTION_INTERVAL` | 5 | compaction.sh / ralph.conf | Periodic trigger interval (coding iterations) |
+Pattern: `K-<type>-<slug>` — types: `constraint`, `decision`, `pattern`, `gotcha`, `unresolved`
+Supersession: `[supersedes: K-<type>-<slug>]` inline. Provenance: `[source: iter N,M]` inline.
 
-## Telemetry
-- Events logged to `.ralph/logs/events.jsonl` as JSONL (`{timestamp, event, message, metadata}`)
-- Event types: orchestrator_start/end, iteration_start/end, validation_pass/fail, pause, resume, note, skip_task
-- All `emit_event` calls in ralph.sh are guarded with `declare -f` checks for graceful degradation
-- Control commands use queue-based format in `.ralph/control/commands.json`: `{"pending": [...]}`
+## Handoff Schema
 
-## Dashboard
-- Single-file HTML at `.ralph/dashboard.html` (vanilla JS + Tailwind CDN)
-- Serve via `python3 .ralph/serve.py --port 8080` from project root
-- Polls state.json, plan.json, handoffs, events.jsonl, knowledge-index.json, progress-log.json every 3 seconds
-- Control plane: pause/resume, inject notes, skip tasks, settings — all POST to serve.py
+Required: `summary` (one-line), `freeform` (full narrative briefing — most important field).
+Structured fields: `task_completed`, `deviations`, `bugs_encountered`, `architectural_notes`, `constraints_discovered`, `files_touched`, `plan_amendments`, `tests_added`, `unfinished_business`, `recommendations`.
 
-## Bash Conventions
-- All scripts use `#!/usr/bin/env bash` and `set -euo pipefail`
-- Functions return 0 on success, non-zero on failure
-- All functions log via the shared `log()` function defined in ralph.sh
-- Variable names use UPPER_SNAKE_CASE for constants/config, lower_snake_case for locals
-- Quote all variable expansions: `"$var"` not `$var`
-- Use `[[ ]]` for conditionals, not `[ ]`
-- Each library module is sourced by ralph.sh and can be tested independently
+## Plan Amendments (plan-ops.sh)
 
-## JSON Conventions
-- All JSON processing uses `jq`
-- Prefer simple, composable jq filters over complex one-liners
-- Test every jq expression in isolation before integrating
-- All config files must validate with `jq . < file.json`
-- Always use `// "default"` for optional jq fields to avoid empty output
+Safety guardrails:
+- Max 3 amendments per iteration
+- Cannot modify current task's status
+- Cannot remove tasks with status "done"
+- Creates plan.json.bak before mutation
+- All mutations logged to .ralph/logs/amendments.log
+
+## Validation (validation.sh)
+
+Strategies: `strict` (all pass), `lenient` (tests pass, lint OK to fail), `tests_only` (lint ignored).
+Unknown commands default to "test" classification (fail-safe).
+Failure context truncated to 500 chars per check to conserve prompt budget.
+
+## Configuration
+
+| Variable | Default | Used By |
+|----------|---------|---------|
+| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | context.sh |
+| `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | compaction.sh |
+| `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | compaction.sh |
+| `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | compaction.sh |
+| `RALPH_COMPACTION_INTERVAL` | 5 | compaction.sh |
+| `RALPH_VALIDATION_STRATEGY` | strict | validation.sh |
+| `RALPH_MAX_ITERATIONS` | 50 | ralph.sh |
+| `RALPH_MIN_DELAY_SECONDS` | 30 | ralph.sh |
+
+## Coding Conventions
+
+### Bash
+- `#!/usr/bin/env bash` + `set -euo pipefail` in all scripts
+- Functions return 0 success, non-zero failure. Log via shared `log()` from ralph.sh
+- UPPER_SNAKE for constants/config, lower_snake for locals. Quote all `"$vars"`
+- `[[ ]]` conditionals. Each lib module tested independently via bats
+- `declare -f` guards on cross-module function calls for graceful degradation
+
+### JSON (jq)
+- Simple composable filters. `// "default"` for optional fields
+- All config files validate with `jq . < file.json`
+
+### Git
+- Commit format: `ralph[N]: TASK-ID — description`
+- Every success → commit. Every failure → rollback to checkpoint
 
 ## Testing
-- Test framework: bats-core
-- Test files: `tests/<module>.bats` (context.bats, compaction.bats, telemetry.bats, progress-log.bats, integration.bats, etc.)
-- Each module has its own test file
-- Use `setup()` and `teardown()` for test fixtures
-- Test in temporary directories to avoid polluting the project
-- Key context engineering tests in `context.bats`: section-aware truncation (8 sections parsed, priority ordering), mode-sensitive handoff (L2 in h+i, freeform-only in h-o), retrieved project memory injection
-- Key verification tests in `compaction.bats`: hard constraint supersession via memory ID, constraint drop rejection, novelty trigger thresholds, JSON append-only
 
-## Git
-- Commits use the format: `ralph[N]: TASK-ID — description`
-- Every successful iteration creates a commit
-- Failed iterations roll back to the checkpoint
+Framework: bats-core. Files: `tests/<module>.bats`. Temp dirs for isolation.
+
+Key test coverage:
+- `context.bats`: 8-section parsing, truncation priority, mode-sensitive handoff, knowledge retrieval
+- `compaction.bats`: constraint supersession, constraint drop rejection, novelty thresholds, JSON append-only
+- `plan-ops.bats`: dependency resolution, amendment guardrails (max 3, no done removal)
+- `integration.bats`: full orchestrator cycles, state management, validation flow
+- `validation.bats`: strategy evaluation, command classification, failure context generation
+
+## Telemetry & Control
+
+- Events: append-only JSONL at `.ralph/logs/events.jsonl`
+- Event types: `orchestrator_start/end`, `iteration_start/end`, `validation_pass/fail`, `pause`, `resume`, `note`, `skip_task`
+- All `emit_event` calls guarded by `declare -f` for graceful degradation
+- Control: queue-based via `.ralph/control/commands.json` (`{"pending": [...]}`)
+- Dashboard POSTs commands → serve.py enqueues → orchestrator polls at loop top

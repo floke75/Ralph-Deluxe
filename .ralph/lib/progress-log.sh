@@ -1,20 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# progress-log.sh — Auto-generated progress log for Ralph Deluxe
-# Extracts progress entries from handoff JSON and writes them to both
-# .ralph/progress-log.md (human-readable) and .ralph/progress-log.json
-# (machine-readable for dashboard).
+# progress-log.sh — Auto-generated human + machine progress logs
+#
+# PURPOSE: After each successful iteration, extracts progress data from the handoff
+# JSON and appends it to both a markdown log (for humans/LLMs reading the repo) and
+# a JSON log (for the dashboard to poll). The markdown log includes a plan summary
+# table that's regenerated on each append to reflect current task statuses.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh main loop step 6b (append_progress_entry), after validation pass
+#   Depends on: jq, log() from ralph.sh
+#   Calls: get_task_by_id() from plan-ops.sh (for title resolution)
+#   Globals read: RALPH_DIR, PLAN_FILE
+#   Files written: .ralph/progress-log.md, .ralph/progress-log.json
+#   Files read: plan.json (for summary table generation)
+#
+# DATA FLOW:
+#   append_progress_entry(handoff_file, iteration, task_id)
+#     → format_progress_entry_json() → appends to .ralph/progress-log.json
+#     → format_progress_entry_md() → appends to .ralph/progress-log.md
+#     → _regenerate_progress_md() → rebuilds md with updated summary table
+#
+# STRUCTURE of progress-log.md:
+#   1. Header (title, plan name)
+#   2. Summary table (task | status | summary) — rebuilt from plan.json each time
+#   3. --- separator
+#   4. Per-iteration entries (### blocks with files, tests, decisions, bugs)
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# init_progress_log — Create both progress log files with initial structure if they don't exist
-# Args: none
-# Globals: RALPH_DIR
-# Returns: 0
+# Create both progress log files with initial structure if they don't exist.
+# Called at orchestrator startup and lazily by append_progress_entry.
+# SIDE EFFECT: Creates .ralph/progress-log.md and .ralph/progress-log.json
 init_progress_log() {
     local ralph_dir="${RALPH_DIR:-.ralph}"
     local md_file="${ralph_dir}/progress-log.md"
@@ -49,11 +70,10 @@ EOF
     fi
 }
 
-# format_progress_entry_md — Format a handoff as a markdown progress entry
+# Format a handoff as a markdown progress entry with all available detail sections.
+# Sections only appear when the handoff has data for them (files, tests, etc.).
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
-# Globals: PLAN_FILE
-# Stdout: markdown block
-# Returns: 0
+# Stdout: markdown block (consumed by _regenerate_progress_md)
 format_progress_entry_md() {
     local handoff_file="$1"
     local iteration="$2"
@@ -122,11 +142,9 @@ format_progress_entry_md() {
     printf '\n---\n'
 }
 
-# format_progress_entry_json — Format a handoff as a JSON progress entry
+# Format a handoff as a JSON progress entry for dashboard consumption.
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
-# Globals: PLAN_FILE
-# Stdout: JSON object
-# Returns: 0
+# Stdout: compact JSON object
 format_progress_entry_json() {
     local handoff_file="$1"
     local iteration="$2"
@@ -159,10 +177,11 @@ format_progress_entry_json() {
         }' "$handoff_file"
 }
 
-# append_progress_entry — Append a progress entry to both .md and .json files
+# Append a progress entry to both .md and .json files.
+# Deduplicates by (task_id, iteration) in JSON; rebuilds MD from scratch.
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
-# Globals: RALPH_DIR, PLAN_FILE
 # Returns: 0 on success, 1 on failure
+# CALLER: ralph.sh main loop step 6b
 append_progress_entry() {
     local handoff_file="$1"
     local iteration="$2"
@@ -182,7 +201,7 @@ append_progress_entry() {
     local json_entry
     json_entry="$(format_progress_entry_json "$handoff_file" "$iteration" "$task_id")"
 
-    # Update JSON file first (so MD summary table can read entry summaries)
+    # Update JSON file (dedup by task_id+iteration, then append new entry)
     local plan_summary
     plan_summary="$(_generate_plan_summary_json)"
 
@@ -206,11 +225,10 @@ append_progress_entry() {
     log "info" "Appended progress log entry for $task_id (iteration $iteration)"
 }
 
-# _resolve_task_title — Get task title from plan.json, falling back to task_id
+# Resolve task title from plan.json, falling back to task_id.
+# Depends on get_task_by_id() from plan-ops.sh; degrades gracefully if unavailable.
 # Args: $1 = task_id
-# Globals: PLAN_FILE
 # Stdout: task title string
-# Returns: 0
 _resolve_task_title() {
     local task_id="$1"
     local title="$task_id"
@@ -233,11 +251,9 @@ _resolve_task_title() {
     printf '%s' "$title"
 }
 
-# _generate_plan_summary_table — Generate the markdown summary table from plan.json
-# Args: none
-# Globals: PLAN_FILE, RALPH_DIR
+# Generate the markdown summary table from plan.json.
+# Includes latest progress entry summary for each task.
 # Stdout: markdown table rows
-# Returns: 0
 _generate_plan_summary_table() {
     local plan_file="${PLAN_FILE:-plan.json}"
     if [[ ! -f "$plan_file" ]]; then
@@ -276,11 +292,8 @@ _generate_plan_summary_table() {
     done < <(jq -r '.tasks[] | "\(.id)\t\(.status)"' "$plan_file")
 }
 
-# _generate_plan_summary_json — Generate plan summary counts from plan.json
-# Args: none
-# Globals: PLAN_FILE
-# Stdout: JSON object with task counts
-# Returns: 0
+# Generate plan summary counts from plan.json for JSON progress log.
+# Stdout: JSON object {total_tasks, completed, pending, failed, skipped}
 _generate_plan_summary_json() {
     local plan_file="${PLAN_FILE:-plan.json}"
     if [[ ! -f "$plan_file" ]]; then
@@ -297,10 +310,10 @@ _generate_plan_summary_json() {
     }' "$plan_file"
 }
 
-# _regenerate_progress_md — Rebuild the markdown file with updated summary table
+# Rebuild the markdown file: header + summary table + all existing entries + new entry.
+# The summary table is regenerated from plan.json on each call, so it always reflects
+# current task statuses.
 # Args: $1 = md file path, $2 = new entry to append (optional)
-# Globals: PLAN_FILE
-# Returns: 0
 _regenerate_progress_md() {
     local md_file="$1"
     local new_entry="${2:-}"

@@ -1,9 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# context.sh — Context assembly functions for Ralph Deluxe
-# Primary function: build_coding_prompt_v2() — handoff-first prompt assembly.
-# Also contains legacy build_coding_prompt() for backward compatibility.
+# context.sh — Prompt assembly and context engineering for coding iterations
+#
+# PURPOSE: This is the most critical module in the orchestrator. It assembles the
+# prompt that Claude receives for each coding iteration. The prompt structure
+# directly determines what the LLM knows and how well it performs. Two versions:
+# build_coding_prompt_v2() (current, mode-aware, 8 sections) and the legacy
+# build_coding_prompt() (v1 fallback).
+#
+# KEY DESIGN DECISIONS:
+# - Handoff-first: The previous iteration's freeform narrative IS the primary
+#   memory, not a summary or index. Everything else is supplementary.
+# - Section-aware truncation: When the prompt exceeds the token budget, sections
+#   are trimmed in priority order (least important first) rather than raw truncation.
+# - Mode-sensitive: handoff-only mode sends less context (just freeform narrative);
+#   handoff-plus-index mode adds structured L2 data and knowledge index retrieval.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh run_coding_cycle() (build_coding_prompt_v2, truncate_to_budget,
+#             estimate_tokens, load_skills, get_prev_handoff_summary, get_earlier_l1_summaries,
+#             format_compacted_context)
+#   Depends on: jq, awk, log() from ralph.sh
+#   Reads files: .ralph/handoffs/handoff-NNN.json (most recent),
+#                .ralph/knowledge-index.md (in handoff-plus-index mode),
+#                .ralph/templates/coding-prompt-footer.md (output instructions),
+#                .ralph/skills/*.md (per-task skill files)
+#   Globals read: RALPH_CONTEXT_BUDGET_TOKENS (default 8000)
+#
+# THE 8-SECTION PROMPT (build_coding_prompt_v2):
+#   Assembled in this exact order. Section headers are "## Name" — truncation
+#   relies on these being exact matches. Do not rename without updating awk parser.
+#
+#   1. ## Current Task         — always present, from plan.json task object
+#   2. ## Failure Context      — retry iterations only, from validation output
+#   3. ## Retrieved Memory     — constraints + decisions from latest handoff
+#   4. ## Previous Handoff     — freeform narrative (± L2 in h+i mode)
+#   5. ## Retrieved Project Memory — h+i mode only, keyword-matched from index
+#   6. ## Accumulated Knowledge — h+i mode only, pointer to knowledge-index.md
+#   7. ## Skills               — task-specific skill files from .ralph/skills/
+#   8. ## Output Instructions  — from template or inline fallback
+#
+# TRUNCATION PRIORITY (lowest number = trimmed first):
+#   1. Accumulated Knowledge (just a pointer — removed entirely)
+#   2. Skills (trimmed from end)
+#   3. Output Instructions (trimmed from end, min 22 chars kept)
+#   4. Previous Handoff (trimmed from end, min 18 chars kept)
+#   5. Retrieved Project Memory (trimmed from end)
+#   6. Retrieved Memory (trimmed from end, min 17 chars kept)
+#   7. Failure Context (trimmed from end)
+#   8. Current Task (last resort — hard truncate)
 
 # Source config if not already loaded
 if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS:-}" ]]; then
@@ -15,13 +61,27 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# estimate_tokens — Approximate token count: chars / 4
+# Approximate token count via chars / 4.
+# This is a rough heuristic used for budget decisions, not billing.
 estimate_tokens() {
     local text="$1"
     echo $(( ${#text} / 4 ))
 }
 
-# truncate_to_budget — If content exceeds budget, truncate from end preserving priority-ordered beginning
+# Section-aware truncation for v2 prompts.
+#
+# HOW IT WORKS:
+# 1. If content fits budget, pass through unchanged.
+# 2. Split content into 8 named sections using awk on "## " headers.
+# 3. Trim sections in priority order (Accumulated Knowledge first, Current Task last).
+# 4. Rebuild prompt from sections after each trim, re-check size.
+# 5. Emit [[TRUNCATION_METADATA]] JSON at end (consumed by tests, not by Claude).
+#
+# CRITICAL: The awk parser matches EXACT header text (e.g., "^## Current Task$").
+# If section headers in build_coding_prompt_v2() change, this parser MUST be updated.
+#
+# Args: $1 = content, $2 = budget_tokens (optional, default RALPH_CONTEXT_BUDGET_TOKENS)
+# Stdout: truncated content + truncation metadata
 truncate_to_budget() {
     local content="$1"
     local budget_tokens="${2:-${RALPH_CONTEXT_BUDGET_TOKENS}}"
@@ -37,11 +97,8 @@ truncate_to_budget() {
     if [[ "$content" == *"## Current Task"* && "$content" == *"## Output Instructions"* ]]; then
         local current_task failure_context retrieved_memory previous_handoff retrieved_project_memory accumulated_knowledge skills output_instructions
 
-        # Use a single awk pass to split content into named sections.
-        # Sections are delimited by ^## headers. The order in the prompt is:
-        #   Current Task, Failure Context, Retrieved Memory, Previous Handoff,
-        #   Retrieved Project Memory (optional), Accumulated Knowledge (optional),
-        #   Skills, Output Instructions
+        # Single awk pass splits content into named sections.
+        # Section boundaries are ^## headers matching the exact 8 section names.
         local _sections
         _sections="$(echo "$content" | awk '
             BEGIN { current="" }
@@ -92,10 +149,7 @@ truncate_to_budget() {
 
         rebuilt="$(_rebuild_prompt)"
 
-        # Truncation priority (lowest → highest):
-        #   Accumulated Knowledge (just a pointer) → Skills → Output Instructions →
-        #   Previous Handoff → Retrieved Project Memory → Retrieved Memory →
-        #   Failure Context → Current Task (last resort)
+        # Iteratively trim sections in priority order until within budget
         while [[ ${#rebuilt} -gt $max_chars ]]; do
             over=$(( ${#rebuilt} - max_chars ))
 
@@ -127,7 +181,7 @@ truncate_to_budget() {
                 failure_context="${failure_context:0:$(( ${#failure_context} - trim_by ))}"
                 [[ " ${truncated_sections[*]} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
             else
-                # Last-resort fallback preserves the beginning of Current Task where task ID/title and headers live.
+                # Last-resort: hard truncate from end, preserving task ID/title at the beginning
                 rebuilt="${rebuilt:0:$max_chars}"
                 [[ " ${truncated_sections[*]} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
                 break
@@ -149,7 +203,10 @@ truncate_to_budget() {
     echo "[[TRUNCATION_METADATA]] {\"truncated_sections\":[\"unstructured\"],\"max_chars\":${max_chars},\"original_chars\":${current_chars}}"
 }
 
-# load_skills — Read and concatenate skill files based on task's skills array
+# Read and concatenate skill files based on task's skills[] array.
+# Skill files live in .ralph/skills/<name>.md and are injected into ## Skills.
+# Args: $1 = task JSON, $2 = skills directory path
+# Stdout: concatenated skill file contents
 load_skills() {
     local task_json="$1"
     local skills_dir="${2:-.ralph/skills}"
@@ -166,7 +223,10 @@ load_skills() {
     echo "$combined"
 }
 
-# get_prev_handoff_summary — Extract L2 summary from most recent handoff JSON
+# Extract L2 summary (decisions object) from most recent handoff JSON.
+# Used by legacy v1 prompt builder; v2 uses get_prev_handoff_for_mode() instead.
+# Args: $1 = handoffs directory
+# Stdout: JSON object with task, decisions, deviations, constraints, failed, unfinished
 get_prev_handoff_summary() {
     local handoffs_dir="${1:-.ralph/handoffs}"
 
@@ -188,9 +248,18 @@ get_prev_handoff_summary() {
     }' "$latest"
 }
 
-# get_prev_handoff_for_mode — Return context from the latest handoff based on mode
-# In handoff-only mode, returns the freeform narrative (the primary memory artifact).
-# In handoff-plus-index mode, returns freeform + structured L2 for richer context.
+# Return context from the latest handoff, varying by operating mode.
+#
+# WHY MODE MATTERS:
+# - handoff-only: The freeform narrative IS the sole memory artifact. No index exists,
+#   so we give the full narrative without structured supplements.
+# - handoff-plus-index: The narrative leads, but we also append structured L2 data
+#   (deviations, constraints, decisions) because the knowledge index handles long-term
+#   memory, freeing the handoff to focus on recent tactical context.
+#
+# Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
+# Stdout: formatted context string for ## Previous Handoff section
+# CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
 get_prev_handoff_for_mode() {
     local handoffs_dir="${1:-.ralph/handoffs}"
     local mode="${2:-handoff-only}"
@@ -209,7 +278,7 @@ get_prev_handoff_for_mode() {
             jq -r '.freeform // empty' "$latest"
             ;;
         handoff-plus-index)
-            # Return freeform + structured L2 for richer context
+            # Return freeform + structured L2 for richer tactical context
             local narrative
             narrative=$(jq -r '.freeform // ""' "$latest")
             local l2
@@ -226,8 +295,11 @@ get_prev_handoff_for_mode() {
     esac
 }
 
-# get_earlier_l1_summaries — Get L1 summaries from the 2nd and 3rd most recent handoffs
-# These provide lightweight context about recent work beyond the immediate previous iteration.
+# Get L1 summaries from the 2nd and 3rd most recent handoffs.
+# Provides lightweight historical context beyond the immediate previous iteration.
+# Used by legacy v1 prompt builder only.
+# Args: $1 = handoffs directory
+# Stdout: bulleted list of L1 summaries (via extract_l1 from compaction.sh)
 get_earlier_l1_summaries() {
     local handoffs_dir="${1:-.ralph/handoffs}"
 
@@ -254,7 +326,10 @@ get_earlier_l1_summaries() {
     echo "$summaries"
 }
 
-# format_compacted_context — Transform compacted context JSON into markdown sections
+# Transform compacted context JSON into markdown sections for v1 prompt.
+# Used by legacy build_coding_prompt() only.
+# Args: $1 = compacted context JSON file path
+# Stdout: formatted markdown sections
 format_compacted_context() {
     local compacted_file="$1"
 
@@ -285,9 +360,22 @@ format_compacted_context() {
     fi
 }
 
-# retrieve_relevant_knowledge — Pull a bounded set of relevant lines from the knowledge index
-# Relevance is based on task id, title/description keywords, and listed libraries.
-# Category priority: Constraints > Architectural Decisions > Unresolved > Gotchas > Patterns
+# Pull a bounded set of relevant knowledge entries from the knowledge index.
+# Used in handoff-plus-index mode to inject task-relevant context.
+#
+# HOW RELEVANCE WORKS:
+# 1. Extract keywords from task id, title, description, and libraries array
+# 2. Search knowledge-index.md via awk, matching keywords against each line
+# 3. Lines are tagged by their category heading (Constraints, Patterns, etc.)
+# 4. Results sorted by category priority, then line order
+# 5. Max 12 lines returned (configurable via $3)
+#
+# CATEGORY PRIORITY (lower = more important):
+#   Constraints (1) > Architectural Decisions (2) > Unresolved (3) > Gotchas (4) > Patterns (5)
+#
+# Args: $1 = task JSON, $2 = index file path, $3 = max lines (default 12)
+# Stdout: matched knowledge lines, priority-sorted
+# CALLER: build_coding_prompt_v2() for ## Retrieved Project Memory section
 retrieve_relevant_knowledge() {
     local task_json="$1"
     local index_file="${2:-.ralph/knowledge-index.md}"
@@ -298,6 +386,7 @@ retrieve_relevant_knowledge() {
         return
     fi
 
+    # Build comma-separated search terms from task metadata
     local task_id task_title task_description terms_csv
     task_id=$(echo "$task_json" | jq -r '.id // ""')
     task_title=$(echo "$task_json" | jq -r '.title // ""')
@@ -325,6 +414,8 @@ retrieve_relevant_knowledge() {
         return
     fi
 
+    # Search index file: match lines containing any search term,
+    # output with category priority and line number for sorting
     awk -v terms="$terms_csv" '
         BEGIN {
             split(terms, raw_terms, ",");
@@ -368,9 +459,21 @@ retrieve_relevant_knowledge() {
     ' "$index_file" | sort -t $'\t' -k1,1n -k2,2n | cut -f3- | head -n "$max_lines"
 }
 
-# build_coding_prompt_v2 — Mode-aware prompt assembly using handoff-first context
-# In handoff-only mode: previous handoff narrative IS the context (no compacted context)
-# In handoff-plus-index mode: handoff leads, plus a pointer to the knowledge index file
+# build_coding_prompt_v2 — Mode-aware prompt assembly (8 sections)
+#
+# This is the primary prompt builder. It assembles all context the coding LLM
+# needs for an iteration, organized into 8 named sections that the truncation
+# engine can independently trim.
+#
+# CRITICAL INVARIANTS:
+# - Section headers must be exactly "## Name" (awk parser in truncate_to_budget matches these)
+# - Section order must match truncation priority expectations
+# - $mode must be passed as a variable, not hardcoded (tests verify this)
+# - In handoff-only mode, sections 5 and 6 are omitted (no knowledge index)
+#
+# Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context
+# Stdout: assembled prompt ready for truncation and CLI submission
+# CALLER: ralph.sh run_coding_cycle() (behind declare -f guard for v1 fallback)
 build_coding_prompt_v2() {
     local task_json="$1"
     local mode="${2:-handoff-only}"
@@ -390,6 +493,7 @@ No failure context."
 ${failure_context}"
     fi
 
+    # Retrieved Memory: constraints + decisions from the latest handoff
     local retrieved_memory_section="## Retrieved Memory
 No retrieved memory available."
     local latest_handoff
@@ -404,11 +508,13 @@ ${constraints:-No constraints recorded.}
 
 ### Decisions
 ${decisions:-No decisions recorded.}"
+        # In h+i mode, also point to the knowledge index
         if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
             retrieved_memory_section+=$'\n\n### Knowledge Index\n- .ralph/knowledge-index.md'
         fi
     fi
 
+    # Previous Handoff: mode-sensitive (freeform only vs freeform + L2)
     local narrative
     narrative="$(get_prev_handoff_for_mode "$handoffs_dir" "$mode")"
     local previous_handoff_section="## Previous Handoff
@@ -418,7 +524,7 @@ This is the first iteration. No previous handoff available."
 ${narrative}"
     fi
 
-    # === RETRIEVED PROJECT MEMORY (handoff-plus-index mode only) ===
+    # Retrieved Project Memory: keyword-matched entries (handoff-plus-index only)
     local retrieved_project_memory_section=""
     if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
         local retrieved_project_memory
@@ -429,7 +535,7 @@ ${retrieved_project_memory}"
         fi
     fi
 
-    # === KNOWLEDGE INDEX POINTER (handoff-plus-index mode only) ===
+    # Accumulated Knowledge: static pointer (handoff-plus-index only, lowest truncation priority)
     local accumulated_knowledge_section=""
     if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
         accumulated_knowledge_section="## Accumulated Knowledge
@@ -443,7 +549,7 @@ No specific skills loaded."
 ${skills_content}"
     fi
 
-    # === OUTPUT INSTRUCTIONS ===
+    # Output Instructions: loaded from template file, with inline fallback
     local output_instructions
     output_instructions="$(cat .ralph/templates/coding-prompt-footer.md 2>/dev/null)" || true
     if [[ -z "$output_instructions" ]]; then
@@ -472,6 +578,7 @@ iteration will actually understand what happened."
     local output_section="## Output Instructions
 ${output_instructions}"
 
+    # Assemble sections in canonical order
     prompt+="$task_section"$'\n\n'
     prompt+="$failure_section"$'\n\n'
     prompt+="$retrieved_memory_section"$'\n\n'
@@ -488,8 +595,10 @@ ${output_instructions}"
     echo "$prompt"
 }
 
-# build_coding_prompt — Assemble prompt from task JSON + context sections
-# Priority order (highest first): task > output instructions > failure context > skills > previous L2 > compacted context > earlier L1
+# build_coding_prompt — Legacy v1 prompt builder (fallback)
+# Used when build_coding_prompt_v2 is not available (should not happen in normal operation).
+# Kept for backward compatibility with older test fixtures.
+# Args: $1-$6 = task_json, compacted_context, prev_handoff, skills, failure_context, earlier_l1
 build_coding_prompt() {
     local task_json="$1"
     local compacted_context="${2:-}"

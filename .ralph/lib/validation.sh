@@ -1,17 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Validation gate module for Ralph Deluxe orchestrator.
-# Provides configurable validation checks with strategy-based evaluation.
+# validation.sh — Post-iteration validation gate
+#
+# PURPOSE: Runs configured validation commands after each coding iteration to
+# decide whether to commit or rollback. Supports three strategies that trade off
+# strictness for forward progress. Produces structured results for failure context
+# injection into the retry prompt.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh main loop step 5 (run_validation)
+#   Depends on: jq, log() from ralph.sh, eval (for command execution)
+#   Globals read: RALPH_VALIDATION_COMMANDS (array of shell commands),
+#                 RALPH_VALIDATION_STRATEGY ("strict"|"lenient"|"tests_only")
+#   Files written: .ralph/logs/validation/iter-N.json (per-iteration results)
+#
+# DATA FLOW:
+#   run_validation(iteration)
+#     → runs each command in RALPH_VALIDATION_COMMANDS
+#     → classify_command() tags each as "test" or "lint"
+#     → evaluate_results() applies strategy to decide pass/fail
+#     → writes .ralph/logs/validation/iter-N.json
+#     → returns 0 (pass) or 1 (fail)
+#   On failure:
+#     → ralph.sh calls generate_failure_context(validation_file)
+#     → output saved to .ralph/context/failure-context.md
+#     → injected into ## Failure Context section of next retry prompt
+#
+# STRATEGIES:
+#   strict    — ALL checks must pass (default)
+#   lenient   — test commands must pass, lint failures are tolerated
+#   tests_only — only test-classified commands evaluated, lint ignored entirely
 
 # Stub log function for standalone sourcing (overridden when ralph.sh sources this)
 if ! declare -f log &>/dev/null; then
     log() { echo "[validation] $*" >&2; }
 fi
 
-# Classify a command as "test" or "lint" based on its name.
+# Tag a command as "test" or "lint" based on known command names.
+# This classification drives strategy evaluation: lenient/tests_only modes
+# only require test-tagged commands to pass.
 # Args: $1 = command string
 # Stdout: "test" or "lint"
+# NOTE: Unknown commands default to "test" (fail-safe: they block progress).
 classify_command() {
     local cmd="$1"
     if [[ "$cmd" =~ (shellcheck|lint|eslint|flake8|pylint|stylelint) ]]; then
@@ -23,11 +54,13 @@ classify_command() {
     fi
 }
 
-# Run all configured validation checks and write results JSON.
+# Run all configured validation checks and write structured results.
+# Each command is executed via eval (supports pipes, flags, etc.).
 # Args: $1 = iteration number
 # Globals: RALPH_VALIDATION_COMMANDS (array), RALPH_VALIDATION_STRATEGY
 # Writes: .ralph/logs/validation/iter-${iteration}.json
 # Returns: 0 if validation passes, 1 if fails
+# CALLER: ralph.sh main loop step 5
 run_validation() {
     local iteration="$1"
     local strategy="${RALPH_VALIDATION_STRATEGY:-strict}"
@@ -68,7 +101,7 @@ run_validation() {
             }]')"
     done
 
-    # Build the full result object
+    # Apply strategy to determine overall pass/fail
     local overall_passed
     overall_passed="$(evaluate_results "$checks_json" "$strategy")"
 
@@ -93,9 +126,11 @@ run_validation() {
     fi
 }
 
-# Evaluate check results against a validation strategy.
+# Apply validation strategy to check results.
 # Args: $1 = checks JSON array, $2 = strategy (strict|lenient|tests_only)
 # Stdout: "true" or "false"
+# NOTE: lenient and tests_only have identical logic (both ignore lint failures)
+# but are kept separate for semantic clarity in config.
 evaluate_results() {
     local checks_json="$1"
     local strategy="$2"
@@ -144,9 +179,13 @@ evaluate_results() {
     esac
 }
 
-# Generate a failure context summary for the next iteration prompt.
-# Args: $1 = path to validation result JSON file
-# Stdout: formatted failure context string
+# Generate a failure context summary for the next iteration's retry prompt.
+# Extracts failed checks, truncates output to 500 chars each to stay within
+# the context budget (truncate_to_budget in context.sh handles further trimming).
+# Args: $1 = path to validation result JSON file (iter-N.json)
+# Stdout: markdown formatted failure context for ## Failure Context section
+# CALLER: ralph.sh main loop, after validation failure, before saving to
+#   .ralph/context/failure-context.md
 generate_failure_context() {
     local result_file="$1"
 
@@ -173,7 +212,7 @@ generate_failure_context() {
         cmd="$(echo "$failed_checks" | jq -r ".[$i].command")"
         output="$(echo "$failed_checks" | jq -r ".[$i].output")"
 
-        # Truncate output to 500 chars
+        # Truncate output to 500 chars to conserve context budget
         if [[ "${#output}" -gt 500 ]]; then
             truncated="${output:0:500}..."
         else
