@@ -28,7 +28,8 @@ set -euo pipefail
 # INPUTS / OUTPUTS / CRITICAL INVARIANTS:
 # - Inputs: task JSON, mode flag, failure context text, optional compacted context,
 #   files under .ralph/handoffs/, .ralph/knowledge-index.md, .ralph/skills/, and
-#   .ralph/templates/coding-prompt-footer.md.
+#   .ralph/templates/coding-prompt-footer.md and
+#   .ralph/templates/coding-prompt.md (fallback).
 # - Outputs: markdown prompt text for LLM submission; when truncating, also emits a
 #   trailing [[TRUNCATION_METADATA]] JSON line for tests/debugging.
 # - Invariants:
@@ -54,7 +55,8 @@ set -euo pipefail
 #   Depends on: jq, awk, log() from ralph.sh
 #   Reads files: .ralph/handoffs/handoff-NNN.json (most recent),
 #                .ralph/knowledge-index.md (in handoff-plus-index mode),
-#                .ralph/templates/coding-prompt-footer.md (output instructions),
+#                .ralph/templates/coding-prompt-footer.md (preferred output instructions),
+#                .ralph/templates/coding-prompt.md (fallback output instructions),
 #                .ralph/skills/*.md (per-task skill files)
 #   Globals read: RALPH_CONTEXT_BUDGET_TOKENS (default 8000)
 #
@@ -297,6 +299,7 @@ get_prev_handoff_summary() {
 #
 # Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
 # Stdout: formatted context string for ## Previous Handoff section
+# Fallback behavior: unknown mode logs a warning and defaults to handoff-only narrative
 # CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
 # Caller: build_coding_prompt_v2() for the parser-sensitive "## Previous Handoff" section.
 # Side effects: reads latest .ralph/handoffs/handoff-*.json; no filesystem writes.
@@ -333,6 +336,10 @@ get_prev_handoff_for_mode() {
             echo ""
             echo "### Structured context from previous iteration"
             echo "${l2}"
+            ;;
+        *)
+            log "warn" "Unknown mode '${mode}' in get_prev_handoff_for_mode; falling back to handoff-only"
+            jq -r '.freeform // empty' "$latest"
             ;;
     esac
 }
@@ -522,8 +529,9 @@ retrieve_relevant_knowledge() {
 # Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context
 # Stdout: assembled prompt ready for truncation and CLI submission
 # CALLER: ralph.sh run_coding_cycle() (behind declare -f guard for v1 fallback)
-# Side effects: reads latest handoff JSON, knowledge index, and output-footer template;
+# Side effects: reads latest handoff JSON, knowledge index, and output-instructions templates;
 # does not write files.
+# Path behavior: resolves runtime files through ${RALPH_DIR:-.ralph} to avoid CWD-coupled lookup failures.
 # Why-specific behavior: keeps exact "##" header literals and order aligned with
 # truncate_to_budget() so section-aware parsing/trimming stays deterministic.
 build_coding_prompt_v2() {
@@ -532,11 +540,12 @@ build_coding_prompt_v2() {
     local skills_content="$3"
     local failure_context="$4"
 
-    local handoffs_dir=".ralph/handoffs"
+    local base_dir="${RALPH_DIR:-.ralph}"
+    local handoffs_dir="${base_dir}/handoffs"
     local prompt=""
 
     local task_section
-    task_section="$(echo "$task_json" | jq -r '"## Current Task\nID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + (.acceptance_criteria | map("- " + .) | join("\n"))')"
+    task_section="$(echo "$task_json" | jq -r '"## Current Task\nID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + ((.acceptance_criteria // []) | map("- " + .) | join("\n"))')"
 
     local failure_section="## Failure Context
 No failure context."
@@ -561,7 +570,7 @@ ${constraints:-No constraints recorded.}
 ### Decisions
 ${decisions:-No decisions recorded.}"
         # In h+i mode, also point to the knowledge index
-        if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
             retrieved_memory_section+=$'\n\n### Knowledge Index\n- .ralph/knowledge-index.md'
         fi
     fi
@@ -578,9 +587,9 @@ ${narrative}"
 
     # Retrieved Project Memory: keyword-matched entries (handoff-plus-index only)
     local retrieved_project_memory_section=""
-    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+    if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
         local retrieved_project_memory
-        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
+        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" "${base_dir}/knowledge-index.md" 12)"
         if [[ -n "$retrieved_project_memory" ]]; then
             retrieved_project_memory_section="## Retrieved Project Memory
 ${retrieved_project_memory}"
@@ -589,7 +598,7 @@ ${retrieved_project_memory}"
 
     # Accumulated Knowledge: static pointer (handoff-plus-index only, lowest truncation priority)
     local accumulated_knowledge_section=""
-    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+    if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
         accumulated_knowledge_section="## Accumulated Knowledge
 A knowledge index of learnings from all previous iterations is available at .ralph/knowledge-index.md. Consult it if you need project history beyond what's in the handoff above."
     fi
@@ -603,7 +612,10 @@ ${skills_content}"
 
     # Output Instructions: loaded from template file, with inline fallback
     local output_instructions
-    output_instructions="$(cat .ralph/templates/coding-prompt-footer.md 2>/dev/null)" || true
+    output_instructions="$(cat "${base_dir}/templates/coding-prompt-footer.md" 2>/dev/null)" || true
+    if [[ -z "$output_instructions" ]]; then
+        output_instructions="$(cat "${base_dir}/templates/coding-prompt.md" 2>/dev/null)" || true
+    fi
     if [[ -z "$output_instructions" ]]; then
         output_instructions="## When You're Done
 

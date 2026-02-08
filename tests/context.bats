@@ -168,6 +168,35 @@ EOF
     [[ -z "$handoff_pos" || "$skills_pos" -le "$handoff_pos" ]]
 }
 
+
+@test "build_coding_prompt_v2 tolerates missing acceptance_criteria" {
+    local task_json='{"id":"TASK-NA","title":"No AC","description":"No acceptance criteria field"}'
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Current Task"* ]]
+    [[ "$output" == *"Acceptance Criteria:"* ]]
+}
+
+@test "build_coding_prompt_v2 falls back to coding-prompt.md when footer template is absent" {
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cat > "$TEST_DIR/.ralph/templates/coding-prompt.md" <<'EOF'
+## When You're Done
+Template fallback works.
+EOF
+
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    local old_pwd
+    old_pwd=$(pwd)
+    cd "$TEST_DIR"
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    cd "$old_pwd"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Template fallback works."* ]]
+}
+
 # --- load_skills ---
 
 @test "load_skills loads multiple skill files" {
@@ -267,6 +296,14 @@ EOF
     [[ "$output" == *"Structured context from previous iteration"* ]]
     # Should contain task ID from structured L2
     [[ "$output" == *"TASK-003"* ]]
+}
+
+
+@test "get_prev_handoff_for_mode falls back to handoff-only on unknown mode" {
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs" "unexpected-mode"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"git operations module"* ]]
+    [[ "$output" != *"Structured context from previous iteration"* ]]
 }
 
 @test "get_prev_handoff_for_mode defaults to handoff-only when mode not specified" {
