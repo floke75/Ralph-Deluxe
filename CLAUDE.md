@@ -153,6 +153,62 @@ Failure context truncated to 500 chars per check to conserve prompt budget.
 | `RALPH_MAX_ITERATIONS` | 50 | ralph.sh |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | ralph.sh |
 
+## Documentation Standards for LLM Agents
+
+This codebase is maintained exclusively by LLM coding agents. All documentation follows patterns optimized for LLM context consumption — maximizing intent clarity per token while making dependency gaps impossible to miss.
+
+### Module Header Template
+
+Every `.sh` file starts with a block comment containing these sections in order:
+
+```bash
+# PURPOSE: What this module does and why it exists (1-3 lines)
+# DEPENDENCIES:
+#   Called by: <parent modules/functions>
+#   Calls: <child modules/functions>
+#   Globals read: <UPPER_SNAKE variables consumed>
+#   Globals written: <UPPER_SNAKE variables mutated>
+#   Files read: <paths consumed>
+#   Files written: <paths mutated>
+# DATA FLOW: How data enters, transforms, and exits this module
+# INVARIANTS: What must always be true for this module to work correctly
+```
+
+### Function Comment Markers
+
+| Marker | Use When | Example |
+|--------|----------|---------|
+| `CALLER:` | Function has non-obvious callers | `# CALLER: main loop in ralph.sh` |
+| `SIDE EFFECT:` | Function mutates state beyond return value | `# SIDE EFFECT: writes .ralph/state.json` |
+| `CRITICAL:` | Invariant that breaks downstream if violated | `# CRITICAL: header must be exactly "## Name"` |
+| `INVARIANT:` | Condition that must hold pre/post execution | `# INVARIANT: array length >= previous` |
+| `WHY:` | Rationale for non-obvious design choices | `# WHY: double-parse because .result is a JSON string` |
+
+### Design Principles
+
+1. **Intent over mechanics** — Lead with WHY, not WHAT. LLMs can read code; they need the reasoning behind it.
+2. **Explicit dependencies** — Every function's inputs, outputs, and side effects declared upfront. No hidden coupling.
+3. **Contracts first** — Preconditions, postconditions, and invariants stated before implementation details.
+4. **Cross-reference liberally** — Name the caller, the callee, the config variable. Make the dependency graph navigable from any node.
+5. **Token-efficient language** — Dense, factual statements. No filler words, no restating what code already says.
+6. **Fail-path documentation** — Document what happens on failure, not just success. Rollback paths, fallback behaviors, error propagation.
+
+### What NOT to Comment
+
+- Variable assignments, increments, simple conditionals — the LLM reads these directly
+- Restatements of what the code does (`# increment counter` above `counter=$((counter + 1))`)
+- Type information inferable from context or naming conventions
+- Boilerplate explanations of standard library functions
+
+### CLAUDE.md Structure Guidelines
+
+This file is loaded into the LLM system prompt. Structure it for rapid orientation:
+- Lead with architecture (data flow diagram, not prose)
+- Module dependency map (who sources/calls whom)
+- Combined tables over separate sections (e.g., section + truncation priority in one table)
+- Configuration tables include "Used By" column for traceability
+- Dense, cross-referenced format — every concept linked to its implementation location
+
 ## Coding Conventions
 
 ### Bash
