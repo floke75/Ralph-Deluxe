@@ -1,3 +1,6 @@
+<!-- Purpose: legacy compaction prompt for producing condensed project memory JSON. -->
+<!-- Consumed by: v1 compaction path (run_compaction_cycle) in .ralph/lib/compaction.sh, when legacy memory compaction is executed. -->
+
 # Memory Compaction Agent
 
 <!-- Legacy template: used by the v1 compaction system (run_compaction_cycle in compaction.sh).

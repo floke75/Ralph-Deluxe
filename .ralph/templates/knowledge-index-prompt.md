@@ -1,3 +1,6 @@
+<!-- Purpose: instruction template for generating and updating knowledge index artifacts. -->
+<!-- Consumed by: compaction/indexing flow in .ralph/lib/compaction.sh, when running the knowledge indexer pass. -->
+
 # Knowledge Indexer
 
 You are the knowledge indexer for the Ralph Deluxe orchestrator. Your role is to read handoff documents from recent coding iterations and maintain a cumulative knowledge index.

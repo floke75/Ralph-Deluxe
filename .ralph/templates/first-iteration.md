@@ -1,3 +1,6 @@
+<!-- Purpose: startup guidance for iteration-1 runs with no prior handoff context. -->
+<!-- Consumed by: iteration prompt assembly in orchestrator startup flow, when current iteration equals 1. -->
+
 # First Iteration
 
 This is **iteration 1** of the Ralph Deluxe orchestrator run. There is no previous context, no compacted history, and no prior handoff documents.
