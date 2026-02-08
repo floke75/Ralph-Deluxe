@@ -353,3 +353,38 @@ JSON
     [[ "$status" -eq 0 ]]
     [[ "$output" == "" ]]
 }
+
+# --- H4: generate_failure_context uses ### not ## ---
+
+@test "generate_failure_context uses ### header to avoid conflicting with parent ## section" {
+    cat > "$TEST_DIR/result-h4.json" <<'EOF'
+{
+    "checks": [
+        {"command": "bats tests/", "exit_code": 1, "output": "test failed", "passed": false, "type": "test"}
+    ]
+}
+EOF
+    run generate_failure_context "$TEST_DIR/result-h4.json"
+    [[ "$status" -eq 0 ]]
+    # Should use ### not ## to avoid header collision with ## Failure Context
+    [[ "$output" == *"### Validation Failures"* ]]
+    # Ensure no line starts with exactly "## " (the output should only have "### ")
+    ! echo "$output" | grep -q "^## Validation Failures"
+}
+
+# --- H3: empty validation commands warning ---
+
+@test "run_validation warns on empty validation commands" {
+    # Override with empty commands array
+    RALPH_VALIDATION_COMMANDS=()
+    log_output=""
+    log() { log_output+="${1:-} ${2:-} "; }
+    export -f log
+
+    run_validation 1
+    local exit_code=$?
+    [[ "$exit_code" -eq 0 ]]
+    # Should have logged a warning about no commands
+    [[ "$log_output" == *"warn"* ]]
+    [[ "$log_output" == *"No validation commands"* ]]
+}

@@ -13,8 +13,8 @@ set -euo pipefail
 #   - handoff-plus-index: includes narrative + structured retrieval from knowledge index.
 #
 # KEY EXPORTED FUNCTIONS:
-# - build_coding_prompt_v2(task_json, mode, skills_content, failure_context): primary
-#   prompt constructor used in normal operation.
+# - build_coding_prompt_v2(task_json, mode, skills_content, failure_context,
+#   first_iteration_context): primary prompt constructor used in normal operation.
 # - truncate_to_budget(content, budget_tokens): post-assembly trimmer that preserves
 #   parser-visible section structure and emits truncation metadata.
 # - get_prev_handoff_for_mode(handoffs_dir, mode): mode-sensitive previous handoff
@@ -30,8 +30,9 @@ set -euo pipefail
 #   files under .ralph/handoffs/, .ralph/knowledge-index.md, .ralph/skills/, and
 #   .ralph/templates/coding-prompt-footer.md and
 #   .ralph/templates/coding-prompt.md (fallback).
-# - Outputs: markdown prompt text for LLM submission; when truncating, also emits a
-#   trailing [[TRUNCATION_METADATA]] JSON line for tests/debugging.
+# - Outputs: markdown prompt text for LLM submission; when truncating, also emits
+#   [[TRUNCATION_METADATA]] JSON to stderr for tests/debugging (not included in
+#   prompt content sent to the LLM).
 # - Invariants:
 #   - Prompt section headers used by v2 truncation are parser-sensitive literals.
 #   - Header names and order must stay aligned between build_coding_prompt_v2() and
@@ -73,14 +74,14 @@ set -euo pipefail
 #   7. ## Skills               — task-specific skill files from .ralph/skills/
 #   8. ## Output Instructions  — from template or inline fallback
 #
-# TRUNCATION PRIORITY (lowest number = trimmed first):
-#   1. Accumulated Knowledge (just a pointer — removed entirely)
-#   2. Skills (trimmed from end)
-#   3. Output Instructions (trimmed from end, min 22 chars kept)
-#   4. Previous Handoff (trimmed from end, min 18 chars kept)
-#   5. Retrieved Project Memory (trimmed from end)
-#   6. Retrieved Memory (trimmed from end, min 17 chars kept)
-#   7. Failure Context (trimmed from end)
+# TRUNCATION PRIORITY (lowest number = removed/trimmed first):
+#   1. Accumulated Knowledge (removed entirely)
+#   2. Skills (removed entirely)
+#   3. Output Instructions (removed entirely)
+#   4. Previous Handoff (removed entirely)
+#   5. Retrieved Project Memory (removed entirely)
+#   6. Retrieved Memory (removed entirely)
+#   7. Failure Context (removed entirely)
 #   8. Current Task (last resort — hard truncate)
 
 # Source config if not already loaded
@@ -107,13 +108,14 @@ estimate_tokens() {
 # 2. Split content into 8 named sections using awk on "## " headers.
 # 3. Trim sections in priority order (Accumulated Knowledge first, Current Task last).
 # 4. Rebuild prompt from sections after each trim, re-check size.
-# 5. Emit [[TRUNCATION_METADATA]] JSON at end (consumed by tests, not by Claude).
+# 5. Emit [[TRUNCATION_METADATA]] JSON to stderr (consumed by tests, not by Claude).
 #
 # CRITICAL: The awk parser matches EXACT header text (e.g., "^## Current Task$").
 # If section headers in build_coding_prompt_v2() change, this parser MUST be updated.
 #
 # Args: $1 = content, $2 = budget_tokens (optional, default RALPH_CONTEXT_BUDGET_TOKENS)
-# Stdout: truncated content + truncation metadata
+# Stdout: truncated content (clean, no metadata appended)
+# Stderr: [[TRUNCATION_METADATA]] JSON line (for tests/logging, not sent to LLM)
 # Caller: ralph.sh run_coding_cycle() after prompt assembly.
 # Side effects: none on disk; CPU-only string processing and writes result to stdout.
 # Why-specific behavior: trims by semantic sections to preserve high-value context and
@@ -185,39 +187,35 @@ truncate_to_budget() {
 
         rebuilt="$(_rebuild_prompt)"
 
-        # Iteratively trim sections in priority order until within budget
+        # Iteratively trim sections in priority order until within budget.
+        # Sections are removed entirely (not left as useless fragments) to
+        # maximize value per token in the final prompt.
         while [[ ${#rebuilt} -gt $max_chars ]]; do
             over=$(( ${#rebuilt} - max_chars ))
 
-            if [[ -n "$accumulated_knowledge" && ${#accumulated_knowledge} -gt 2 ]]; then
+            if [[ -n "$accumulated_knowledge" ]]; then
                 accumulated_knowledge=""
                 [[ " ${truncated_sections[*]} " == *" Accumulated Knowledge "* ]] || truncated_sections+=("Accumulated Knowledge")
-            elif [[ -n "$skills" && ${#skills} -gt 10 ]]; then
-                trim_by=$(( over < ${#skills} - 10 ? over : ${#skills} - 10 ))
-                skills="${skills:0:$(( ${#skills} - trim_by ))}"
+            elif [[ -n "$skills" ]]; then
+                skills=""
                 [[ " ${truncated_sections[*]} " == *" Skills "* ]] || truncated_sections+=("Skills")
-            elif [[ -n "$output_instructions" && ${#output_instructions} -gt 22 ]]; then
-                trim_by=$(( over < ${#output_instructions} - 22 ? over : ${#output_instructions} - 22 ))
-                output_instructions="${output_instructions:0:$(( ${#output_instructions} - trim_by ))}"
+            elif [[ -n "$output_instructions" ]]; then
+                output_instructions=""
                 [[ " ${truncated_sections[*]} " == *" Output Instructions "* ]] || truncated_sections+=("Output Instructions")
-            elif [[ -n "$previous_handoff" && ${#previous_handoff} -gt 18 ]]; then
-                trim_by=$(( over < ${#previous_handoff} - 18 ? over : ${#previous_handoff} - 18 ))
-                previous_handoff="${previous_handoff:0:$(( ${#previous_handoff} - trim_by ))}"
+            elif [[ -n "$previous_handoff" ]]; then
+                previous_handoff=""
                 [[ " ${truncated_sections[*]} " == *" Previous Handoff "* ]] || truncated_sections+=("Previous Handoff")
-            elif [[ -n "$retrieved_project_memory" && ${#retrieved_project_memory} -gt 2 ]]; then
-                trim_by=$(( over < ${#retrieved_project_memory} - 2 ? over : ${#retrieved_project_memory} - 2 ))
-                retrieved_project_memory="${retrieved_project_memory:0:$(( ${#retrieved_project_memory} - trim_by ))}"
+            elif [[ -n "$retrieved_project_memory" ]]; then
+                retrieved_project_memory=""
                 [[ " ${truncated_sections[*]} " == *" Retrieved Project Memory "* ]] || truncated_sections+=("Retrieved Project Memory")
-            elif [[ -n "$retrieved_memory" && ${#retrieved_memory} -gt 17 ]]; then
-                trim_by=$(( over < ${#retrieved_memory} - 17 ? over : ${#retrieved_memory} - 17 ))
-                retrieved_memory="${retrieved_memory:0:$(( ${#retrieved_memory} - trim_by ))}"
+            elif [[ -n "$retrieved_memory" ]]; then
+                retrieved_memory=""
                 [[ " ${truncated_sections[*]} " == *" Retrieved Memory "* ]] || truncated_sections+=("Retrieved Memory")
-            elif [[ -n "$failure_context" && ${#failure_context} -gt 16 ]]; then
-                trim_by=$(( over < ${#failure_context} - 16 ? over : ${#failure_context} - 16 ))
-                failure_context="${failure_context:0:$(( ${#failure_context} - trim_by ))}"
+            elif [[ -n "$failure_context" ]]; then
+                failure_context=""
                 [[ " ${truncated_sections[*]} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
             else
-                # Last-resort: hard truncate from end, preserving task ID/title at the beginning
+                # Last-resort: hard truncate to budget, keeping content from the beginning
                 rebuilt="${rebuilt:0:$max_chars}"
                 [[ " ${truncated_sections[*]} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
                 break
@@ -229,14 +227,14 @@ truncate_to_budget() {
         local trunc_json
         trunc_json=$(printf '%s\n' "${truncated_sections[@]}" | jq -R . | jq -s --argjson max_chars "$max_chars" --argjson original_chars "$current_chars" '{truncated_sections: ., max_chars: $max_chars, original_chars: $original_chars}')
         echo "$rebuilt"
-        echo ""
-        echo "[[TRUNCATION_METADATA]] ${trunc_json}"
+        # Emit metadata to stderr so it's available for tests/logging but NOT
+        # included in the prompt content sent to the LLM (fixes C4).
+        echo "[[TRUNCATION_METADATA]] ${trunc_json}" >&2
         return
     fi
 
     echo "${content:0:$max_chars}"
-    echo ""
-    echo "[[TRUNCATION_METADATA]] {\"truncated_sections\":[\"unstructured\"],\"max_chars\":${max_chars},\"original_chars\":${current_chars}}"
+    echo "[[TRUNCATION_METADATA]] {\"truncated_sections\":[\"unstructured\"],\"max_chars\":${max_chars},\"original_chars\":${current_chars}}" >&2
 }
 
 # Read and concatenate skill files based on task's skills[] array.
@@ -298,7 +296,8 @@ get_prev_handoff_summary() {
 #   memory, freeing the handoff to focus on recent tactical context.
 #
 # Args: $1 = handoffs directory, $2 = mode ("handoff-only" or "handoff-plus-index")
-# Stdout: formatted context string for ## Previous Handoff section
+# Stdout: formatted context string for ## Previous Handoff section, or empty string
+#   when no handoff files exist (caller treats empty as "first iteration")
 # Fallback behavior: unknown mode logs a warning and defaults to handoff-only narrative
 # CRITICAL: build_coding_prompt_v2() must pass $mode variable, not a hardcoded string.
 # Caller: build_coding_prompt_v2() for the parser-sensitive "## Previous Handoff" section.
@@ -328,9 +327,9 @@ get_prev_handoff_for_mode() {
             narrative=$(jq -r '.freeform // ""' "$latest")
             local l2
             l2=$(jq -r '{
-                task: .task_completed.task_id,
-                decisions: .architectural_notes,
-                constraints: [.constraints_discovered[] | "\(.constraint): \(.workaround // .impact)"]
+                task: (.task_completed.task_id // "unknown"),
+                decisions: (.architectural_notes // []),
+                constraints: [(.constraints_discovered // [])[] | "\(.constraint): \(.workaround // .impact // "no details")"]
             }' "$latest")
             echo "${narrative}"
             echo ""
@@ -416,7 +415,7 @@ format_compacted_context() {
 # Used in handoff-plus-index mode to inject task-relevant context.
 #
 # HOW RELEVANCE WORKS:
-# 1. Extract keywords from task id, title, description, and libraries array
+# 1. Extract keywords from task id, title, description (min 2 chars), and libraries array
 # 2. Search knowledge-index.md via awk, matching keywords against each line
 # 3. Lines are tagged by their category heading (Constraints, Patterns, etc.)
 # 4. Results sorted by category priority, then line order
@@ -455,7 +454,7 @@ retrieve_relevant_knowledge() {
                 | ascii_downcase
                 | gsub("[^a-z0-9 ]"; " ")
                 | split(" ")
-                | map(select(length >= 4))
+                | map(select(length >= 2))
                 | .[])
         ]
         | map(select(length > 0))
@@ -526,7 +525,9 @@ retrieve_relevant_knowledge() {
 # - $mode must be passed as a variable, not hardcoded (tests verify this)
 # - In handoff-only mode, sections 5 and 6 are omitted (no knowledge index)
 #
-# Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context
+# Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context,
+#       $5 = first iteration context (optional, injected into Previous Handoff when
+#            no prior handoffs exist)
 # Stdout: assembled prompt ready for truncation and CLI submission
 # CALLER: ralph.sh run_coding_cycle() (behind declare -f guard for v1 fallback)
 # Side effects: reads latest handoff JSON, knowledge index, and output-instructions templates;
@@ -539,6 +540,7 @@ build_coding_prompt_v2() {
     local mode="${2:-handoff-only}"
     local skills_content="$3"
     local failure_context="$4"
+    local first_iteration_context="${5:-}"
 
     local base_dir="${RALPH_DIR:-.ralph}"
     local handoffs_dir="${base_dir}/handoffs"
@@ -576,6 +578,7 @@ ${decisions:-No decisions recorded.}"
     fi
 
     # Previous Handoff: mode-sensitive (freeform only vs freeform + L2)
+    # On iteration 1, injects first_iteration_context as onboarding guidance.
     local narrative
     narrative="$(get_prev_handoff_for_mode "$handoffs_dir" "$mode")"
     local previous_handoff_section="## Previous Handoff
@@ -583,6 +586,9 @@ This is the first iteration. No previous handoff available."
     if [[ -n "$narrative" ]]; then
         previous_handoff_section="## Previous Handoff
 ${narrative}"
+    elif [[ -n "$first_iteration_context" ]]; then
+        previous_handoff_section="## Previous Handoff
+${first_iteration_context}"
     fi
 
     # Retrieved Project Memory: keyword-matched entries (handoff-plus-index only)

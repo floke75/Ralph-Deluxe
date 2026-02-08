@@ -85,15 +85,17 @@ Section headers MUST be `## <Name>` exactly — the truncation awk parser matche
 | # | Section | Source | Present When | Truncation Priority |
 |---|---------|--------|--------------|---------------------|
 | 1 | `## Current Task` | plan.json task | Always | 8 (last resort) |
-| 2 | `## Failure Context` | validation output | Retry only | 7 |
-| 3 | `## Retrieved Memory` | latest handoff constraints + decisions | Always | 6 (min 17 chars) |
-| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` | Iteration 2+ | 4 (min 18 chars) |
-| 5 | `## Retrieved Project Memory` | `retrieve_relevant_knowledge()` | h+i mode + matches found | 5 |
+| 2 | `## Failure Context` | validation output | Retry only | 7 (removed entirely) |
+| 3 | `## Retrieved Memory` | latest handoff constraints + decisions | Always | 6 (removed entirely) |
+| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` or first-iteration.md | Iteration 1+ | 4 (removed entirely) |
+| 5 | `## Retrieved Project Memory` | `retrieve_relevant_knowledge()` | h+i mode + matches found | 5 (removed entirely) |
 | 6 | `## Accumulated Knowledge` | Static pointer to knowledge-index.md | h+i mode + index exists | 1 (removed first) |
-| 7 | `## Skills` | `.ralph/skills/<name>.md` | Task has skills[] | 2 |
-| 8 | `## Output Instructions` | Template file or inline fallback | Always | 3 (min 22 chars) |
+| 7 | `## Skills` | `.ralph/skills/<name>.md` | Task has skills[] | 2 (removed entirely) |
+| 8 | `## Output Instructions` | `coding-prompt-footer.md` or inline fallback | Always | 3 (removed entirely) |
 
 **CRITICAL**: `build_coding_prompt_v2()` must pass `$mode` (not a hardcoded string) to `get_prev_handoff_for_mode()`. Tests verify this.
+
+**Function signature**: `build_coding_prompt_v2(task_json, mode, skills_content, failure_context, first_iteration_context)`. The 5th parameter is optional — on iteration 1, ralph.sh passes the contents of `first-iteration.md`; it's injected into `## Previous Handoff` when no prior handoffs exist.
 
 ### Mode-Sensitive Handoff Retrieval
 

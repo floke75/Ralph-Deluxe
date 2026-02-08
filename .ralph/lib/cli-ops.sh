@@ -188,7 +188,7 @@ parse_handoff_output() {
 save_handoff() {
     local handoff_json="$1"
     local iteration="$2"
-    local handoffs_dir=".ralph/handoffs"
+    local handoffs_dir="${RALPH_DIR:-.ralph}/handoffs"
     local handoff_file
     handoff_file=$(printf "%s/handoff-%03d.json" "$handoffs_dir" "$iteration")
 

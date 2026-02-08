@@ -356,14 +356,15 @@ run_compaction_cycle() {
 # core of what Ralph does each iteration.
 # CALLER: main loop step 4
 # SIDE EFFECT: Creates handoff file, updates compaction counters in state.json,
-#              cleans up temp skills file.
+#              cleans up temp skills file, deletes failure context file on success.
 # Returns: 0 + handoff_file path on stdout, or 1 on failure
-# Depends on: prepare_skills_file(), format_compacted_context() [context.sh],
-#             get_prev_handoff_summary(), get_earlier_l1_summaries() [context.sh],
+# Depends on: prepare_skills_file() [context.sh],
 #             build_coding_prompt_v2() or build_coding_prompt() [context.sh],
 #             truncate_to_budget(), estimate_tokens() [context.sh],
 #             run_coding_iteration(), parse_handoff_output(), save_handoff(),
 #             extract_response_metadata() [cli-ops.sh]
+#   v1 fallback only: format_compacted_context(), get_prev_handoff_summary(),
+#             get_earlier_l1_summaries() [context.sh]
 run_coding_cycle() {
     local task_json="$1"
     local current_iteration="$2"
@@ -371,31 +372,17 @@ run_coding_cycle() {
     task_id="$(echo "$task_json" | jq -r '.id // "unknown"')"
 
     # --- Assemble context components ---
-    local skills_file compacted_context prev_handoff prompt
+    local skills_file prompt
 
     skills_file="$(prepare_skills_file "$task_json")"
 
-    # Legacy compacted context (from run_compaction_cycle, not knowledge indexer)
-    compacted_context=""
-    if [[ -f "${RALPH_DIR}/context/compacted-latest.json" ]]; then
-        compacted_context="$(format_compacted_context "${RALPH_DIR}/context/compacted-latest.json")"
-    fi
-
-    # L2 summary from most recent handoff (used by legacy v1 prompt builder)
-    prev_handoff="$(get_prev_handoff_summary "${RALPH_DIR}/handoffs")"
-
-    # L1 summaries from 2nd/3rd most recent handoffs (v1 builder only)
-    local earlier_l1=""
-    earlier_l1="$(get_earlier_l1_summaries "${RALPH_DIR}/handoffs")"
-
-    # Failure context from a previous failed validation — consumed once then deleted.
-    # This creates the retry feedback loop: validation output -> failure context ->
-    # next iteration's ## Failure Context section -> LLM fixes the issue.
+    # Failure context from a previous failed validation — consumed once.
+    # Deletion deferred until after successful handoff parse (fixes C3: prevents
+    # loss of retry guidance if cycle fails mid-flight).
     local failure_context=""
     local failure_ctx_file="${RALPH_DIR}/context/failure-context.md"
     if [[ -f "$failure_ctx_file" ]]; then
         failure_context="$(cat "$failure_ctx_file")"
-        rm -f "$failure_ctx_file"
         log "info" "Injecting failure context from previous attempt"
     fi
 
@@ -404,12 +391,12 @@ run_coding_cycle() {
         skills_content="$(cat "$skills_file")"
     fi
 
-    # First-iteration bootstrap: inject project onboarding context that only
-    # matters for the very first coding pass (no prior handoffs exist yet).
+    # First-iteration bootstrap: onboarding context for the very first coding
+    # pass when no prior handoffs exist. Passed to v2 builder as $5 so it gets
+    # injected into ## Previous Handoff (fixes C1: no longer silently discarded).
+    local first_iteration_context=""
     if [[ "$current_iteration" -eq 1 && -f "${RALPH_DIR}/templates/first-iteration.md" ]]; then
-        local first_iter_content
-        first_iter_content="$(cat "${RALPH_DIR}/templates/first-iteration.md")"
-        compacted_context="${first_iter_content}"$'\n\n'"${compacted_context}"
+        first_iteration_context="$(cat "${RALPH_DIR}/templates/first-iteration.md")"
     fi
 
     # --- Build prompt ---
@@ -417,8 +404,18 @@ run_coding_cycle() {
     # The declare -f guard enables graceful degradation if context.sh is an
     # older version that only has build_coding_prompt().
     if declare -f build_coding_prompt_v2 >/dev/null 2>&1; then
-        prompt="$(build_coding_prompt_v2 "$task_json" "$MODE" "$skills_content" "$failure_context")"
+        prompt="$(build_coding_prompt_v2 "$task_json" "$MODE" "$skills_content" "$failure_context" "$first_iteration_context")"
     else
+        # Legacy v1 path: assemble v1-only context components
+        local compacted_context="" prev_handoff="" earlier_l1=""
+        if [[ -f "${RALPH_DIR}/context/compacted-latest.json" ]]; then
+            compacted_context="$(format_compacted_context "${RALPH_DIR}/context/compacted-latest.json")"
+        fi
+        prev_handoff="$(get_prev_handoff_summary "${RALPH_DIR}/handoffs")"
+        earlier_l1="$(get_earlier_l1_summaries "${RALPH_DIR}/handoffs")"
+        if [[ -n "$first_iteration_context" ]]; then
+            compacted_context="${first_iteration_context}"$'\n\n'"${compacted_context}"
+        fi
         prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content" "$failure_context" "$earlier_l1")"
     fi
 
@@ -447,14 +444,21 @@ run_coding_cycle() {
         return 1
     fi
 
+    # Handoff parsed successfully — now safe to delete consumed failure context
+    # (fixes C3: deferred deletion prevents loss on mid-cycle failures).
+    if [[ -f "$failure_ctx_file" ]]; then
+        rm -f "$failure_ctx_file"
+    fi
+
     local handoff_file
     handoff_file="$(save_handoff "$handoff_json" "$current_iteration")"
 
     # --- Update compaction trigger counters ---
     # These accumulate between compaction runs; check_compaction_trigger()
     # in compaction.sh reads them to decide whether to fire.
+    # Use compact JSON byte count for accurate threshold comparison (fixes M2).
     local handoff_bytes
-    handoff_bytes="$(wc -c < "$handoff_file" | tr -d ' ')"
+    handoff_bytes="$(echo "$handoff_json" | jq -c . | wc -c | tr -d ' ')"
     local prev_bytes
     prev_bytes="$(read_state "total_handoff_bytes_since_compaction")"
     write_state "total_handoff_bytes_since_compaction" "$(( prev_bytes + handoff_bytes ))"
@@ -720,10 +724,10 @@ main() {
             set_task_status "$PLAN_FILE" "$task_id" "pending"
             increment_retry_count "$PLAN_FILE" "$task_id"
 
-            # Retry gate: if the budget is spent, convert retry intent to terminal
-            # failure so the loop does not spin indefinitely on this task.
+            # Retry gate: re-read count from plan.json AFTER increment to get the
+            # current value (fixes L1: stale task_json snapshot caused off-by-one).
             local retry_count max_retries
-            retry_count="$(echo "$task_json" | jq -r '.retry_count // 0')"
+            retry_count="$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .retry_count // 0' "$PLAN_FILE")"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
             if (( retry_count >= max_retries )); then
                 log "error" "Task $task_id exceeded max retries ($max_retries)"
@@ -796,8 +800,9 @@ main() {
 
             increment_retry_count "$PLAN_FILE" "$task_id"
 
+            # Re-read count from plan.json AFTER increment (fixes L1: stale snapshot).
             local retry_count max_retries
-            retry_count="$(echo "$task_json" | jq -r '.retry_count // 0')"
+            retry_count="$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .retry_count // 0' "$PLAN_FILE")"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
 
             # Validation-fail retry branch: terminalize when budget is exhausted,
@@ -806,7 +811,7 @@ main() {
                 log "error" "Task $task_id exceeded max retries ($max_retries), marking failed"
                 set_task_status "$PLAN_FILE" "$task_id" "failed"
             else
-                log "info" "Will retry task $task_id (attempt $((retry_count + 1))/$max_retries)"
+                log "info" "Will retry task $task_id (attempt ${retry_count}/$max_retries)"
                 set_task_status "$PLAN_FILE" "$task_id" "pending"
             fi
 
