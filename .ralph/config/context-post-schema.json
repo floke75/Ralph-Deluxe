@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "properties": {
+    "knowledge_updated": {
+      "type": "boolean",
+      "description": "Whether the knowledge index files were updated this pass."
+    },
+    "failure_pattern_detected": {
+      "type": "boolean",
+      "description": "Whether a repetitive failure pattern was detected across recent iterations."
+    },
+    "failure_pattern": {
+      "type": "string",
+      "description": "Description of the detected failure pattern, if any."
+    },
+    "recommended_action": {
+      "type": "string",
+      "enum": ["proceed", "skip_task", "modify_plan", "request_human_review", "increase_retries"],
+      "description": "Recommendation for the orchestrator's next action."
+    },
+    "plan_suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "modify", "remove"] },
+          "task_id": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["action", "reason"]
+      },
+      "description": "Suggested plan amendments based on accumulated knowledge."
+    },
+    "coding_agent_signals": {
+      "type": "object",
+      "properties": {
+        "research_requests": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Topics the coding agent requested research on."
+        },
+        "human_review_requested": {
+          "type": "boolean"
+        },
+        "confidence_assessment": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "description": "Assessment of the coding agent's confidence in its output."
+        }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-line summary of what this knowledge organization pass accomplished."
+    }
+  },
+  "required": ["knowledge_updated", "recommended_action", "summary"]
+}

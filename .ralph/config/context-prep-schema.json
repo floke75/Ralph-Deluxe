@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["proceed", "skip", "request_human_review", "research"],
+      "description": "Directive for the orchestrator: proceed with coding, skip this task, request human review, or run a research pass first."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Explanation of why this action was chosen. Required for all actions."
+    },
+    "stuck_detection": {
+      "type": "object",
+      "properties": {
+        "is_stuck": {
+          "type": "boolean",
+          "description": "Whether a repetitive failure pattern was detected."
+        },
+        "evidence": {
+          "type": "string",
+          "description": "What evidence suggests the coding agent is stuck."
+        },
+        "suggested_action": {
+          "type": "string",
+          "description": "What the orchestrator should do to break the loop."
+        }
+      },
+      "required": ["is_stuck"]
+    },
+    "prompt_token_estimate": {
+      "type": "number",
+      "description": "Approximate token count of the prepared coding prompt."
+    },
+    "sections_included": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Which prompt sections were included in the prepared prompt."
+    },
+    "context_notes": {
+      "type": "string",
+      "description": "Internal notes about context assembly decisions. Logged by orchestrator for debugging."
+    }
+  },
+  "required": ["action", "reason", "stuck_detection"]
+}

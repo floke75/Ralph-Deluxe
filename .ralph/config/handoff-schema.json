@@ -115,6 +115,25 @@
         "required": ["constraint", "impact"]
       }
     },
+    "request_research": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Topics the coding agent wants the context agent to research before the next iteration."
+    },
+    "request_human_review": {
+      "type": "object",
+      "properties": {
+        "needed": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "required": ["needed"],
+      "description": "Signal from coding agent that human review is needed."
+    },
+    "confidence_level": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "Coding agent's self-assessed confidence in the quality of this iteration's output."
+    },
     "summary": {
       "type": "string",
       "description": "One-line summary of what was accomplished this iteration."

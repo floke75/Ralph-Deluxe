@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "review_passed": {
+      "type": "boolean",
+      "description": "Whether the code changes pass review."
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["critical", "warning", "suggestion"] },
+          "file": { "type": "string" },
+          "description": { "type": "string" },
+          "suggested_fix": { "type": "string" }
+        },
+        "required": ["severity", "description"]
+      },
+      "description": "Issues found during review."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief summary of the review findings."
+    }
+  },
+  "required": ["review_passed", "issues", "summary"]
+}

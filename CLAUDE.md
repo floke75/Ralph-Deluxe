@@ -2,12 +2,14 @@
 
 ## What This Is
 
-Bash orchestrator that drives Claude Code CLI through structured task plans. Each coding iteration writes a freeform handoff narrative that becomes the primary context for the next iteration. Two modes: `handoff-only` (default) and `handoff-plus-index` (adds periodic knowledge indexing).
+Bash orchestrator that drives Claude Code CLI through structured task plans. Each coding iteration writes a freeform handoff narrative that becomes the primary context for the next iteration. Three modes: `handoff-only` (default), `handoff-plus-index` (adds periodic knowledge indexing), and `agent-orchestrated` (LLM context agent prepares prompts and organizes knowledge every turn).
 
 ## Architecture Overview
 
 ```
 plan.json → ralph.sh main loop → for each task:
+
+  handoff-only / handoff-plus-index modes:
   1. get_next_task()           [plan-ops.sh]    — select task with deps satisfied
   2. check_compaction_trigger() [compaction.sh]  — h+i mode: maybe run indexer
   3. create_checkpoint()       [git-ops.sh]     — save HEAD for rollback
@@ -17,14 +19,31 @@ plan.json → ralph.sh main loop → for each task:
   7. run_validation()          [validation.sh]  — run test/lint commands
   8a. PASS: commit + log + apply_amendments
   8b. FAIL: rollback + generate_failure_context → retry
+
+  agent-orchestrated mode (recommended for quality):
+  1. get_next_task()           [plan-ops.sh]    — select task with deps satisfied
+  2. create_checkpoint()       [git-ops.sh]     — save HEAD for rollback
+  3. run_context_prep()        [agents.sh]      — LLM context agent assembles prompt
+     → writes .ralph/context/prepared-prompt.md
+     → returns directive (proceed/skip/review/research)
+  4. run_coding_iteration()    [cli-ops.sh]     — invoke coding agent with prepared prompt
+  5. parse_handoff_output()    [cli-ops.sh]     — extract handoff from response
+  6. run_validation()          [validation.sh]  — run test/lint commands
+  7a. PASS: commit + log + apply_amendments
+  7b. FAIL: rollback + generate_failure_context → retry
+  8. run_context_post()        [agents.sh]      — LLM context agent organizes knowledge
+     → updates knowledge-index.{md,json}
+     → detects stuck patterns, processes coding agent signals
+  9. run_agent_passes()        [agents.sh]      — optional: code review, docs, etc.
 ```
 
 ## Module Dependency Map
 
 ```
 ralph.sh (main) ─── sources all .ralph/lib/*.sh modules
-  ├── context.sh      — prompt assembly, truncation, knowledge retrieval
-  ├── compaction.sh   — triggers, indexer, verification (calls cli-ops.sh)
+  ├── agents.sh       — multi-agent orchestration: context prep/post, agent passes
+  ├── context.sh      — prompt assembly, truncation, knowledge retrieval (h-o/h+i modes)
+  ├── compaction.sh   — triggers, indexer, verification (h+i mode; reused by agents.sh)
   ├── cli-ops.sh      — claude CLI invocation, handoff parsing
   ├── validation.sh   — post-iteration test/lint gate
   ├── plan-ops.sh     — task selection, amendments, plan mutation
@@ -46,21 +65,30 @@ ralph.sh memory/bootstrap paths
 | Path | Purpose |
 |------|---------|
 | `.ralph/ralph.sh` | Main orchestrator — state machine, main loop, signal handling |
-| `.ralph/lib/*.sh` | 8 library modules (sourced by ralph.sh) |
+| `.ralph/lib/*.sh` | 9 library modules (sourced by ralph.sh) |
 | `.ralph/config/ralph.conf` | Runtime config (mode, thresholds, validation commands) |
+| `.ralph/config/agents.json` | Agent pass configuration (context agent settings, optional passes) |
 | `.ralph/config/handoff-schema.json` | JSON schema for coding iteration output |
+| `.ralph/config/context-prep-schema.json` | JSON schema for context prep agent output |
+| `.ralph/config/context-post-schema.json` | JSON schema for context post agent output |
+| `.ralph/config/review-agent-schema.json` | JSON schema for code review agent output |
 | `.ralph/config/mcp-coding.json` | MCP config for coding iterations |
-| `.ralph/config/mcp-memory.json` | MCP config for memory/indexer iterations |
+| `.ralph/config/mcp-context.json` | MCP config for context agent (Context7 for library docs) |
+| `.ralph/config/mcp-memory.json` | MCP config for legacy memory/indexer iterations |
 | `.ralph/config/memory-output-schema.json` | JSON schema for legacy memory compaction output |
-| `.ralph/templates/` | Prompt templates (coding-prompt.md, first-iteration.md, knowledge-index-prompt.md, memory-prompt.md) |
+| `.ralph/templates/context-prep-prompt.md` | System prompt for context prep agent (agent-orchestrated mode) |
+| `.ralph/templates/context-post-prompt.md` | System prompt for context post agent (agent-orchestrated mode) |
+| `.ralph/templates/review-agent-prompt.md` | System prompt for code review agent pass |
+| `.ralph/templates/` | Other prompt templates (coding-prompt-footer.md, first-iteration.md, knowledge-index-prompt.md, memory-prompt.md) |
 | `.ralph/skills/` | Per-task skill injection files (matched by task.skills[] array) |
 | `.ralph/handoffs/` | Raw handoff JSON per iteration (handoff-001.json, etc.) |
 | `.ralph/control/commands.json` | Dashboard→orchestrator command queue |
 | `.ralph/logs/events.jsonl` | Append-only JSONL telemetry stream |
 | `.ralph/logs/validation/` | Per-iteration validation results (iter-N.json) |
+| `.ralph/context/prepared-prompt.md` | Prompt assembled by context agent (agent-orchestrated mode) |
 | `.ralph/state.json` | Runtime state: iteration, mode, status, compaction counters |
-| `.ralph/knowledge-index.md` | Categorized knowledge index (h+i mode) |
-| `.ralph/knowledge-index.json` | Iteration-keyed index for dashboard (h+i mode) |
+| `.ralph/knowledge-index.md` | Categorized knowledge index (h+i and agent-orchestrated modes) |
+| `.ralph/knowledge-index.json` | Iteration-keyed index for dashboard (h+i and agent-orchestrated modes) |
 | `.ralph/memory.jsonl` | Legacy append-only memory compaction output (migration compatibility) |
 | `.ralph/progress-log.{md,json}` | Auto-generated progress logs |
 | `.ralph/dashboard.html` | Single-file operator dashboard (vanilla JS + Tailwind) |
@@ -71,12 +99,38 @@ ralph.sh memory/bootstrap paths
 
 ## Operating Modes
 
-| Mode | Memory Strategy | Prompt Sections | Token Budget | Compaction |
-|------|----------------|-----------------|-------------|------------|
-| `handoff-only` (default) | Freeform narrative only | 1-4, 6-7 | 8000 | None |
-| `handoff-plus-index` | Narrative + full knowledge index inlined | All 7 | 16000 | Triggered |
+| Mode | Memory Strategy | Prompt Assembly | Agent Calls/Iter | Compaction | Quality |
+|------|----------------|-----------------|-----------------|------------|---------|
+| `handoff-only` (default) | Freeform narrative only | Bash (`build_coding_prompt_v2`) | 1 | None | Baseline |
+| `handoff-plus-index` | Narrative + knowledge index | Bash (`build_coding_prompt_v2`) | 1-2 | Trigger-based | Better |
+| `agent-orchestrated` | LLM-curated context + knowledge | LLM context agent | 2-3+ | Every iteration | Best |
 
 Mode priority: `--mode` CLI flag > `RALPH_MODE` in ralph.conf > default (`handoff-only`)
+
+### Agent-Orchestrated Mode (agents.sh)
+
+Two-agent architecture: a **context agent** prepares pristine context for a **coding agent**, then organizes the coding agent's output into accumulated knowledge. Optional agent passes (code review, documentation) can run after each iteration.
+
+**Agent call sequence per iteration:**
+1. **Context prep** (pre-coding): Reads handoffs, knowledge index, failure context. Assembles tailored coding prompt. Detects stuck patterns. Returns directive (proceed/skip/review/research).
+2. **Coding agent**: Receives the prepared prompt. Executes the plan step. Writes handoff with gained insights. Can signal back: `request_research`, `request_human_review`, `confidence_level`.
+3. **Context post** (post-coding): Processes handoff into knowledge index. Detects failure patterns across iterations. Recommends next action.
+4. **Optional passes**: Configurable agents (e.g., code review with cheaper model) run based on trigger conditions.
+
+**Context agent I/O**: Receives a lightweight manifest with file pointers (not full content). Uses built-in Read tools to access what it needs. Writes `prepared-prompt.md` as side effect. Returns directives via JSON schema.
+
+**Stuck detection**: Context agent analyzes retry counts, failure patterns, and consecutive handoff narratives. Can recommend skipping a task, requesting human review, or modifying the plan.
+
+**Coding agent signals** (new handoff schema fields):
+- `request_research`: Topics for context agent to research next iteration
+- `request_human_review`: Signal that human judgment is needed
+- `confidence_level`: Self-assessed output confidence (high/medium/low)
+
+**Agent pass framework** (`.ralph/config/agents.json`):
+- Passes configured with: name, model, trigger, max_turns, prompt template, schema
+- Triggers: `always`, `on_success`, `on_failure`, `periodic:N`
+- Passes are non-fatal: failures logged but don't block the main loop
+- Code review pass included as skeleton (disabled by default)
 
 ## The 7-Section Prompt (`build_coding_prompt_v2` in context.sh)
 
@@ -134,6 +188,7 @@ Supersession: `[supersedes: K-<type>-<slug>]` inline. Provenance: `[source: iter
 
 Required: `summary` (one-line), `freeform` (full narrative briefing — most important field).
 Structured fields: `task_completed`, `deviations`, `bugs_encountered`, `architectural_notes`, `constraints_discovered`, `files_touched`, `plan_amendments`, `tests_added`, `unfinished_business`, `recommendations`.
+Signal fields (agent-orchestrated mode): `request_research` (string[]), `request_human_review` ({needed, reason}), `confidence_level` (high/medium/low).
 
 ## Plan Amendments (plan-ops.sh)
 
@@ -163,6 +218,8 @@ Failure context truncated to 500 chars per check to conserve prompt budget.
 | `RALPH_VALIDATION_STRATEGY` | strict | validation.sh |
 | `RALPH_MAX_ITERATIONS` | 50 | ralph.sh |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | ralph.sh |
+| `RALPH_CONTEXT_AGENT_MODEL` | "" (default) | agents.sh (model override for context agent) |
+| `RALPH_AGENT_PASSES_ENABLED` | true | agents.sh (enable/disable optional passes) |
 
 ## Documentation Standards for LLM Agents
 
@@ -242,6 +299,7 @@ This file is loaded into the LLM system prompt. Structure it for rapid orientati
 Framework: bats-core. Files: `tests/<module>.bats`. Temp dirs for isolation.
 
 Key test coverage:
+- `agents.bats`: context prep/post input building, directive handling, pass triggers, agent config loading, dry-run flows, handoff signal fields
 - `context.bats`: 7-section parsing, truncation priority, mode-sensitive handoff, knowledge index inlining, budget-per-mode
 - `compaction.bats`: constraint supersession, constraint drop rejection, novelty thresholds, JSON append-only
 - `plan-ops.bats`: dependency resolution, amendment guardrails (max 3, no done removal)
@@ -273,7 +331,7 @@ Key constraints:
 ## Telemetry & Control
 
 - Events: append-only JSONL at `.ralph/logs/events.jsonl`
-- Event types: `orchestrator_start/end`, `iteration_start/end`, `validation_pass/fail`, `pause`, `resume`, `note`, `skip_task`
+- Event types: `orchestrator_start/end`, `iteration_start/end`, `validation_pass/fail`, `pause`, `resume`, `note`, `skip_task`, `stuck_detected`, `failure_pattern`, `human_review_requested`, `agent_pass`
 - All `emit_event` calls guarded by `declare -f` for graceful degradation
 - Control: queue-based via `.ralph/control/commands.json` (`{"pending": [...]}`)
 - Dashboard POSTs commands → serve.py enqueues → orchestrator polls at loop top
