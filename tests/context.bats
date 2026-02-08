@@ -35,6 +35,26 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
+# --- get_budget_for_mode ---
+
+@test "get_budget_for_mode returns base budget for handoff-only mode" {
+    run get_budget_for_mode "handoff-only"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" -eq 8000 ]]
+}
+
+@test "get_budget_for_mode returns HPI budget for handoff-plus-index mode" {
+    run get_budget_for_mode "handoff-plus-index"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" -eq 16000 ]]
+}
+
+@test "get_budget_for_mode defaults to base budget for unknown mode" {
+    run get_budget_for_mode "unknown-mode"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" -eq 8000 ]]
+}
+
 # --- estimate_tokens ---
 
 @test "estimate_tokens returns chars/4 for a known string" {
@@ -481,7 +501,7 @@ EOF
     [[ "$output" == *"set -euo pipefail"* ]]
 }
 
-@test "build_coding_prompt_v2 does NOT include knowledge index pointer in handoff-only mode" {
+@test "build_coding_prompt_v2 does NOT include knowledge index in handoff-only mode" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
@@ -495,27 +515,36 @@ EOF
     run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"## Retrieved Memory"* ]]
-    [[ "$output" != *"knowledge-index.md"* ]]
+    # In handoff-only mode, no knowledge index is inlined
+    [[ "$output" != *"## Retrieved Project Memory"* ]]
 }
 
-@test "build_coding_prompt_v2 includes knowledge index pointer in handoff-plus-index mode" {
+@test "build_coding_prompt_v2 inlines knowledge index in handoff-plus-index mode" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
     mkdir -p "$TEST_DIR/.ralph/handoffs"
     mkdir -p "$TEST_DIR/.ralph/templates"
     cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
-    # Create the knowledge index file
-    echo "# Knowledge Index" > "$TEST_DIR/.ralph/knowledge-index.md"
+    # Create the knowledge index file with actual content
+    cat > "$TEST_DIR/.ralph/knowledge-index.md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 5 (2025-01-15)
+
+## Constraints
+- [K-constraint-test] Shell MUST NOT exceed 30s [source: iter 3]
+EOF
     cd "$TEST_DIR"
 
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"## Retrieved Memory"* ]]
-    [[ "$output" == *"knowledge-index.md"* ]]
+    [[ "$output" == *"## Retrieved Project Memory"* ]]
+    # Full index content should be inlined
+    [[ "$output" == *"Shell MUST NOT exceed 30s"* ]]
+    [[ "$output" == *"# Knowledge Index"* ]]
 }
 
-@test "build_coding_prompt_v2 includes retrieved project memory lines relevant to task" {
+@test "build_coding_prompt_v2 inlines full knowledge index as retrieved project memory" {
     local task_json
     task_json='{
       "id": "TASK-321",
@@ -546,8 +575,11 @@ EOF
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"## Retrieved Project Memory"* ]]
+    # Full index is inlined — all entries present, not just keyword matches
     [[ "$output" == *"TASK-321 migration logic"* ]]
     [[ "$output" == *"jq streaming mode"* ]]
+    [[ "$output" == *"shellcheck rules"* ]]
+    [[ "$output" == *"regex escapes in awk"* ]]
 }
 
 @test "retrieve_relevant_knowledge truncates output to max lines" {
@@ -590,7 +622,7 @@ EOF
     [[ "$output" != *"## Retrieved Project Memory"* ]]
 }
 
-@test "build_coding_prompt_v2 omits knowledge index pointer when file missing in handoff-plus-index mode" {
+@test "build_coding_prompt_v2 omits Retrieved Project Memory when index file missing in handoff-plus-index mode" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
@@ -603,7 +635,7 @@ EOF
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "" ""
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"## Retrieved Memory"* ]]
-    [[ "$output" != *"knowledge-index.md"* ]]
+    [[ "$output" != *"## Retrieved Project Memory"* ]]
 }
 
 @test "build_coding_prompt_v2 includes retrieved memory constraints and decisions from handoff" {
@@ -654,7 +686,7 @@ EOF
     [[ "$output" != *"Structured context from previous iteration"* ]]
 }
 
-@test "build_coding_prompt_v2 priority order: task > failure > handoff > retrieved > knowledge > skills > output" {
+@test "build_coding_prompt_v2 priority order: task > failure > memory > handoff > retrieved > skills > output" {
     local task_json
     task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
 
@@ -672,13 +704,12 @@ EOF
     run build_coding_prompt_v2 "$task_json" "handoff-plus-index" "skills content" "failure info"
     [[ "$status" -eq 0 ]]
 
-    local task_pos failure_pos retrieved_memory_pos handoff_pos retrieved_pos knowledge_pos skills_pos output_pos
+    local task_pos failure_pos retrieved_memory_pos handoff_pos retrieved_pos skills_pos output_pos
     task_pos=$(echo "$output" | grep -n "## Current Task" | head -1 | cut -d: -f1)
     failure_pos=$(echo "$output" | grep -n "## Failure Context" | head -1 | cut -d: -f1)
     retrieved_memory_pos=$(echo "$output" | grep -n "## Retrieved Memory" | head -1 | cut -d: -f1)
     handoff_pos=$(echo "$output" | grep -n "## Previous Handoff" | head -1 | cut -d: -f1)
     retrieved_pos=$(echo "$output" | grep -n "## Retrieved Project Memory" | head -1 | cut -d: -f1)
-    knowledge_pos=$(echo "$output" | grep -n "## Accumulated Knowledge" | head -1 | cut -d: -f1)
     skills_pos=$(echo "$output" | grep -n "## Skills" | head -1 | cut -d: -f1)
     output_pos=$(echo "$output" | grep -n "## Output Instructions" | head -1 | cut -d: -f1)
 
@@ -686,12 +717,11 @@ EOF
     [[ "$failure_pos" -lt "$retrieved_memory_pos" ]]
     [[ "$retrieved_memory_pos" -lt "$handoff_pos" ]]
     [[ "$handoff_pos" -lt "$retrieved_pos" ]]
-    [[ "$retrieved_pos" -lt "$knowledge_pos" ]]
-    [[ "$knowledge_pos" -lt "$skills_pos" ]]
+    [[ "$retrieved_pos" -lt "$skills_pos" ]]
     [[ "$skills_pos" -lt "$output_pos" ]]
 }
 
-@test "truncate_to_budget handles Retrieved Project Memory and Accumulated Knowledge sections" {
+@test "truncate_to_budget handles Retrieved Project Memory section" {
     local sectioned
     sectioned=$(cat <<'EOF'
 ## Current Task
@@ -721,9 +751,6 @@ Narrative text. Narrative text. Narrative text.
 - [K-constraint-timeout] Shell MUST NOT exceed 30s [source: iter 7]
 - [K-decision-jq-streaming] Use jq streaming mode [source: iter 6]
 
-## Accumulated Knowledge
-A knowledge index is at .ralph/knowledge-index.md.
-
 ## Skills
 Skill details. Skill details. Skill details. Skill details.
 
@@ -737,10 +764,9 @@ EOF
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"## Retrieved Project Memory"* ]]
     [[ "$output" == *"K-constraint-timeout"* ]]
-    [[ "$output" == *"## Accumulated Knowledge"* ]]
 }
 
-@test "truncate_to_budget trims Accumulated Knowledge before Skills under pressure" {
+@test "truncate_to_budget trims Skills first under pressure" {
     local sectioned
     sectioned=$(cat <<'EOF'
 ## Current Task
@@ -766,9 +792,6 @@ Short narrative.
 ## Retrieved Project Memory
 Important retrieved knowledge line.
 
-## Accumulated Knowledge
-A knowledge index is at .ralph/knowledge-index.md. Consult it if you need project history beyond the handoff above. Extra padding to make this section large enough to matter in truncation testing.
-
 ## Skills
 SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL.
 
@@ -777,15 +800,15 @@ OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT.
 EOF
 )
 
-    # Set a budget tight enough to trigger truncation of Accumulated Knowledge
+    # Set a budget tight enough to trigger truncation of Skills
     # but large enough to keep Retrieved Project Memory intact.
-    # Content is ~685 chars with headers; Accumulated Knowledge body is ~175 chars.
-    # Budget of 130 tokens (520 chars) forces Accumulated Knowledge removal only.
-    run truncate_to_budget "$sectioned" 130
+    # Content is ~510 chars with headers; Skills body is ~96 chars.
+    # Budget of 105 tokens (420 chars) forces Skills removal first.
+    run truncate_to_budget "$sectioned" 105
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"[[TRUNCATION_METADATA]]"* ]]
-    [[ "$output" == *'"Accumulated Knowledge"'* ]]
-    # Retrieved Project Memory should still be present (higher priority than Accumulated Knowledge)
+    [[ "$output" == *'"Skills"'* ]]
+    # Retrieved Project Memory should still be present (higher priority than Skills)
     [[ "$output" == *"Important retrieved knowledge line"* ]]
 }
 

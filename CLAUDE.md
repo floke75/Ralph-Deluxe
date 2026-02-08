@@ -11,7 +11,7 @@ plan.json → ralph.sh main loop → for each task:
   1. get_next_task()           [plan-ops.sh]    — select task with deps satisfied
   2. check_compaction_trigger() [compaction.sh]  — h+i mode: maybe run indexer
   3. create_checkpoint()       [git-ops.sh]     — save HEAD for rollback
-  4. build_coding_prompt_v2()  [context.sh]     — assemble 8-section prompt
+  4. build_coding_prompt_v2()  [context.sh]     — assemble 7-section prompt
   5. run_coding_iteration()    [cli-ops.sh]     — invoke claude CLI
   6. parse_handoff_output()    [cli-ops.sh]     — extract handoff from response
   7. run_validation()          [validation.sh]  — run test/lint commands
@@ -71,27 +71,26 @@ ralph.sh memory/bootstrap paths
 
 ## Operating Modes
 
-| Mode | Memory Strategy | Prompt Sections | Compaction |
-|------|----------------|-----------------|------------|
-| `handoff-only` (default) | Freeform narrative only | 1-4, 7-8 | None |
-| `handoff-plus-index` | Narrative + knowledge index | All 8 | Triggered |
+| Mode | Memory Strategy | Prompt Sections | Token Budget | Compaction |
+|------|----------------|-----------------|-------------|------------|
+| `handoff-only` (default) | Freeform narrative only | 1-4, 6-7 | 8000 | None |
+| `handoff-plus-index` | Narrative + full knowledge index inlined | All 7 | 16000 | Triggered |
 
 Mode priority: `--mode` CLI flag > `RALPH_MODE` in ralph.conf > default (`handoff-only`)
 
-## The 8-Section Prompt (`build_coding_prompt_v2` in context.sh)
+## The 7-Section Prompt (`build_coding_prompt_v2` in context.sh)
 
 Section headers MUST be `## <Name>` exactly — the truncation awk parser matches these.
 
 | # | Section | Source | Present When | Truncation Priority |
 |---|---------|--------|--------------|---------------------|
-| 1 | `## Current Task` | plan.json task | Always | 8 (last resort) |
-| 2 | `## Failure Context` | validation output | Retry only | 7 (removed entirely) |
-| 3 | `## Retrieved Memory` | latest handoff constraints + decisions | Always | 6 (removed entirely) |
-| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` or first-iteration.md | Iteration 1+ | 4 (removed entirely) |
-| 5 | `## Retrieved Project Memory` | `retrieve_relevant_knowledge()` | h+i mode + matches found | 5 (removed entirely) |
-| 6 | `## Accumulated Knowledge` | Static pointer to knowledge-index.md | h+i mode + index exists | 1 (removed first) |
-| 7 | `## Skills` | `.ralph/skills/<name>.md` | Task has skills[] | 2 (removed entirely) |
-| 8 | `## Output Instructions` | `coding-prompt-footer.md` or inline fallback | Always | 3 (removed entirely) |
+| 1 | `## Current Task` | plan.json task | Always | 7 (last resort) |
+| 2 | `## Failure Context` | validation output | Retry only | 6 (removed entirely) |
+| 3 | `## Retrieved Memory` | latest handoff constraints + decisions | Always | 5 (removed entirely) |
+| 4 | `## Previous Handoff` | `get_prev_handoff_for_mode()` or first-iteration.md | Iteration 1+ | 3 (removed entirely) |
+| 5 | `## Retrieved Project Memory` | Full `.ralph/knowledge-index.md` inlined | h+i mode + index exists | 4 (removed entirely) |
+| 6 | `## Skills` | `.ralph/skills/<name>.md` | Task has skills[] | 1 (removed first) |
+| 7 | `## Output Instructions` | `coding-prompt-footer.md` or inline fallback | Always | 2 (removed entirely) |
 
 **CRITICAL**: `build_coding_prompt_v2()` must pass `$mode` (not a hardcoded string) to `get_prev_handoff_for_mode()`. Tests verify this.
 
@@ -102,9 +101,11 @@ Section headers MUST be `## <Name>` exactly — the truncation awk parser matche
 - `handoff-only`: Returns freeform narrative only
 - `handoff-plus-index`: Returns freeform + structured L2 (deviations, constraints, decisions) under "### Structured context from previous iteration"
 
-### Knowledge Retrieval (`retrieve_relevant_knowledge` in context.sh)
+### Knowledge Index Inlining
 
-Extracts keywords from task metadata → searches knowledge-index.md via awk → returns max 12 lines sorted by category priority: Constraints (1) > Architectural Decisions (2) > Unresolved (3) > Gotchas (4) > Patterns (5). Injected into `## Retrieved Project Memory` section.
+In `handoff-plus-index` mode, the full contents of `.ralph/knowledge-index.md` are inlined into the `## Retrieved Project Memory` section. This replaces the previous keyword-matching approach (`retrieve_relevant_knowledge()`) which capped output at 12 lines. The HPI token budget (16000, double the base 8000) accommodates the larger prompt. If the index grows too large, the truncation system removes the entire section and the coding agent can still `Read` the file directly.
+
+`retrieve_relevant_knowledge()` is retained for backward compatibility but is no longer called by `build_coding_prompt_v2()`.
 
 ## Knowledge Indexer (compaction.sh) — h+i mode only
 
@@ -153,7 +154,8 @@ Failure context truncated to 500 chars per check to conserve prompt budget.
 
 | Variable | Default | Used By |
 |----------|---------|---------|
-| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | context.sh |
+| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | context.sh (handoff-only mode budget) |
+| `RALPH_CONTEXT_BUDGET_TOKENS_HPI` | 16000 | context.sh (handoff-plus-index mode budget) |
 | `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | compaction.sh |
 | `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | compaction.sh |
 | `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | compaction.sh |
@@ -240,7 +242,7 @@ This file is loaded into the LLM system prompt. Structure it for rapid orientati
 Framework: bats-core. Files: `tests/<module>.bats`. Temp dirs for isolation.
 
 Key test coverage:
-- `context.bats`: 8-section parsing, truncation priority, mode-sensitive handoff, knowledge retrieval
+- `context.bats`: 7-section parsing, truncation priority, mode-sensitive handoff, knowledge index inlining, budget-per-mode
 - `compaction.bats`: constraint supersession, constraint drop rejection, novelty thresholds, JSON append-only
 - `plan-ops.bats`: dependency resolution, amendment guardrails (max 3, no done removal)
 - `integration.bats`: full orchestrator cycles, state management, validation flow

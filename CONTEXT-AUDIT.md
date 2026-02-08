@@ -396,11 +396,15 @@ but not interleaving with in-flight atomic writes.
 if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS:-}" ]]; then
     RALPH_CONTEXT_BUDGET_TOKENS=8000
 fi
+if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS_HPI:-}" ]]; then
+    RALPH_CONTEXT_BUDGET_TOKENS_HPI=16000
+fi
 ```
 
 This runs when context.sh is sourced (at `source_libs` time). If
-`RALPH_CONTEXT_BUDGET_TOKENS` is set in ralph.conf AFTER context.sh is sourced
-(e.g., in a later-alphabetically-sorted config file), the default sticks.
+`RALPH_CONTEXT_BUDGET_TOKENS` or `RALPH_CONTEXT_BUDGET_TOKENS_HPI` is set in
+ralph.conf AFTER context.sh is sourced (e.g., in a later-alphabetically-sorted
+config file), the default sticks.
 Currently not an issue because ralph.conf is sourced before `source_libs()`.
 
 ---
