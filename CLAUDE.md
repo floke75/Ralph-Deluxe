@@ -35,6 +35,10 @@ ralph.sh (main) ─── sources all .ralph/lib/*.sh modules
 serve.py (HTTP) ←→ dashboard.html (polls every 3s)
   Writes: .ralph/control/commands.json (read by telemetry.sh)
   Writes: .ralph/config/ralph.conf (read by ralph.sh)
+
+ralph.sh memory/bootstrap paths
+  Reads (optional): .ralph/templates/first-iteration.md
+  Reads (legacy compaction): .ralph/templates/memory-prompt.md
 ```
 
 ## Directory Structure
@@ -47,7 +51,8 @@ serve.py (HTTP) ←→ dashboard.html (polls every 3s)
 | `.ralph/config/handoff-schema.json` | JSON schema for coding iteration output |
 | `.ralph/config/mcp-coding.json` | MCP config for coding iterations |
 | `.ralph/config/mcp-memory.json` | MCP config for memory/indexer iterations |
-| `.ralph/templates/` | Prompt templates (coding-prompt.md, knowledge-index-prompt.md, etc.) |
+| `.ralph/config/memory-output-schema.json` | JSON schema for legacy memory compaction output |
+| `.ralph/templates/` | Prompt templates (coding-prompt.md, first-iteration.md, knowledge-index-prompt.md, memory-prompt.md) |
 | `.ralph/skills/` | Per-task skill injection files (matched by task.skills[] array) |
 | `.ralph/handoffs/` | Raw handoff JSON per iteration (handoff-001.json, etc.) |
 | `.ralph/control/commands.json` | Dashboard→orchestrator command queue |
@@ -56,11 +61,13 @@ serve.py (HTTP) ←→ dashboard.html (polls every 3s)
 | `.ralph/state.json` | Runtime state: iteration, mode, status, compaction counters |
 | `.ralph/knowledge-index.md` | Categorized knowledge index (h+i mode) |
 | `.ralph/knowledge-index.json` | Iteration-keyed index for dashboard (h+i mode) |
+| `.ralph/memory.jsonl` | Legacy append-only memory compaction output (migration compatibility) |
 | `.ralph/progress-log.{md,json}` | Auto-generated progress logs |
 | `.ralph/dashboard.html` | Single-file operator dashboard (vanilla JS + Tailwind) |
 | `.ralph/serve.py` | HTTP server for dashboard |
 | `plan.json` | Task plan (project root) |
-| `tests/*.bats` | bats-core test suite (one file per module) |
+| `tests/*.bats` | bats-core test suite (unit, integration, and error-handling coverage) |
+| `tests/test_helper/common.sh` | Shared bats helper for temp workspace setup/teardown |
 
 ## Operating Modes
 
@@ -236,6 +243,7 @@ Key test coverage:
 - `plan-ops.bats`: dependency resolution, amendment guardrails (max 3, no done removal)
 - `integration.bats`: full orchestrator cycles, state management, validation flow
 - `validation.bats`: strategy evaluation, command classification, failure context generation
+- `error-handling.bats`: retry/rollback resilience paths and interrupted-run behavior
 
 ## Dashboard Screenshots
 
