@@ -21,8 +21,8 @@ set -euo pipefail
 #     safely retry without guessing whether output is complete.
 #
 # DEPENDENCIES:
-#   Called by: ralph.sh run_coding_cycle(), run_compaction_cycle()
-#              compaction.sh run_knowledge_indexer()
+#   Called by: ralph.sh run_coding_cycle(), run_agent_coding_cycle(),
+#              run_compaction_cycle(); compaction.sh run_knowledge_indexer()
 #   Depends on: `claude` CLI binary on PATH, jq, log() from ralph.sh
 #   Reads files: .ralph/config/handoff-schema.json, .ralph/config/memory-output-schema.json,
 #                .ralph/config/mcp-coding.json, .ralph/config/mcp-memory.json

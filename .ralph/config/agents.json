@@ -1,0 +1,31 @@
+{
+  "context_agent": {
+    "model": null,
+    "prep": {
+      "max_turns": 10,
+      "prompt_template": "context-prep-prompt.md",
+      "schema": "context-prep-schema.json",
+      "mcp_config": "mcp-context.json",
+      "output_file": ".ralph/context/prepared-prompt.md"
+    },
+    "post": {
+      "max_turns": 10,
+      "prompt_template": "context-post-prompt.md",
+      "schema": "context-post-schema.json",
+      "mcp_config": "mcp-context.json"
+    }
+  },
+  "passes": [
+    {
+      "name": "review",
+      "enabled": false,
+      "model": "haiku",
+      "trigger": "on_success",
+      "max_turns": 5,
+      "prompt_template": "review-agent-prompt.md",
+      "schema": "review-agent-schema.json",
+      "mcp_config": "mcp-coding.json",
+      "read_only": true
+    }
+  ]
+}

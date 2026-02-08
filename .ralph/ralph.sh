@@ -46,7 +46,7 @@ DRY_RUN=false
 RESUME=false
 LOG_LEVEL="${RALPH_LOG_LEVEL:-info}"
 LOG_FILE="${RALPH_LOG_FILE:-.ralph/logs/ralph.log}"
-MODE=""  # handoff-only | handoff-plus-index (set by CLI, config, or default)
+MODE=""  # handoff-only | handoff-plus-index | agent-orchestrated (set by CLI, config, or default)
 
 ###############################################################################
 # Logging
@@ -103,7 +103,7 @@ Options:
   --max-iterations N   Maximum iterations to run (default: $MAX_ITERATIONS)
   --plan FILE          Path to plan.json (default: $PLAN_FILE)
   --config FILE        Path to ralph.conf (default: $CONFIG_FILE)
-  --mode MODE          Operating mode: handoff-only (default) or handoff-plus-index
+  --mode MODE          Operating mode: handoff-only (default), handoff-plus-index, or agent-orchestrated
   --dry-run            Print what would happen without executing
   --resume             Resume from saved state
   -h, --help           Show this help message
@@ -348,13 +348,136 @@ run_compaction_cycle() {
 }
 
 ###############################################################################
+# Helper: run agent-orchestrated coding cycle (context agent → coding → knowledge)
+###############################################################################
+
+# WHY: In agent-orchestrated mode, the context agent (an LLM) assembles the prompt
+# instead of bash. This function wraps the 3-phase flow:
+#   Phase 1: Context agent prepares the prompt (writes prepared-prompt.md)
+#   Phase 2: Coding agent executes with the prepared prompt
+#   Phase 3 (knowledge org) runs post-validation in the main loop, not here.
+#
+# CALLER: main loop (agent-orchestrated mode only)
+# SIDE EFFECT: Creates handoff file, writes prepared-prompt.md, deletes failure
+#              context on success, updates compaction counters.
+# Returns: 0 + handoff_file path on stdout, or 1 on failure
+#          On certain failures, writes DIRECTIVE:<action> to stderr for the caller.
+# Depends on: agents.sh (run_context_prep, read_prepared_prompt, handle_prep_directives),
+#             cli-ops.sh (run_coding_iteration, parse_handoff_output, save_handoff,
+#             extract_response_metadata), context.sh (prepare_skills_file, estimate_tokens)
+run_agent_coding_cycle() {
+    local task_json="$1"
+    local current_iteration="$2"
+    local task_id
+    task_id="$(echo "$task_json" | jq -r '.id // "unknown"')"
+
+    # --- Phase 1: Context Preparation ---
+    log "info" "Phase 1: Context preparation for $task_id"
+    local prep_directive
+    if ! prep_directive="$(run_context_prep "$task_json" "$current_iteration" "$MODE")"; then
+        log "error" "Context preparation failed for $task_id"
+        return 1
+    fi
+
+    local prep_action
+    prep_action="$(handle_prep_directives "$prep_directive")"
+
+    case "$prep_action" in
+        proceed)
+            ;; # Normal flow — continue to coding
+        skip)
+            log "warn" "Context agent recommends skipping task $task_id"
+            echo "DIRECTIVE:skip" >&2
+            return 1
+            ;;
+        request_human_review)
+            log "warn" "Context agent requests human review for $task_id"
+            echo "DIRECTIVE:request_human_review" >&2
+            return 1
+            ;;
+        research)
+            log "info" "Context agent requests research before coding $task_id"
+            echo "DIRECTIVE:research" >&2
+            return 1
+            ;;
+    esac
+
+    # --- Phase 2: Coding ---
+    log "info" "Phase 2: Coding iteration for $task_id"
+    local prompt
+    if ! prompt="$(read_prepared_prompt)"; then
+        log "error" "Failed to read prepared prompt for $task_id"
+        return 1
+    fi
+
+    local skills_file
+    skills_file="$(prepare_skills_file "$task_json")"
+
+    log "info" "Prompt prepared by context agent ($(estimate_tokens "$prompt") estimated tokens)"
+
+    local raw_response
+    if ! raw_response="$(run_coding_iteration "$prompt" "$task_json" "$skills_file")"; then
+        log "error" "Coding iteration failed for $task_id"
+        [[ -n "$skills_file" && -f "$skills_file" ]] && rm -f "$skills_file"
+        return 1
+    fi
+
+    [[ -n "$skills_file" && -f "$skills_file" ]] && rm -f "$skills_file"
+
+    local handoff_json
+    if ! handoff_json="$(parse_handoff_output "$raw_response")"; then
+        log "error" "Failed to parse handoff output for $task_id"
+        return 1
+    fi
+
+    # Delete consumed failure context on successful parse
+    local failure_ctx_file="${RALPH_DIR}/context/failure-context.md"
+    if [[ -f "$failure_ctx_file" ]]; then
+        rm -f "$failure_ctx_file"
+    fi
+
+    local handoff_file
+    handoff_file="$(save_handoff "$handoff_json" "$current_iteration")"
+
+    # Update compaction trigger counters
+    local handoff_bytes
+    handoff_bytes="$(echo "$handoff_json" | jq -c . | wc -c | tr -d ' ')"
+    local prev_bytes
+    prev_bytes="$(read_state "total_handoff_bytes_since_compaction")"
+    write_state "total_handoff_bytes_since_compaction" "$(( prev_bytes + handoff_bytes ))"
+
+    local prev_iters
+    prev_iters="$(read_state "coding_iterations_since_compaction")"
+    write_state "coding_iterations_since_compaction" "$(( prev_iters + 1 ))"
+
+    local metadata
+    metadata="$(extract_response_metadata "$raw_response")"
+    log "info" "Coding iteration metadata: $metadata"
+
+    # Check for coding agent signals
+    local human_review_needed
+    human_review_needed="$(echo "$handoff_json" | jq -r '.request_human_review.needed // false')"
+    if [[ "$human_review_needed" == "true" ]]; then
+        local review_reason
+        review_reason="$(echo "$handoff_json" | jq -r '.request_human_review.reason // "no reason given"')"
+        log "warn" "Coding agent requests human review: $review_reason"
+        if declare -f emit_event >/dev/null 2>&1; then
+            emit_event "human_review_requested" "Coding agent requests review" \
+                "$(jq -cn --arg reason "$review_reason" '{reason: $reason}')" || true
+        fi
+    fi
+
+    echo "$handoff_file"
+}
+
+###############################################################################
 # Helper: run a complete coding iteration cycle (prompt -> CLI -> parse -> save)
 ###############################################################################
 
 # WHY: Encapsulates the entire prompt-assembly-to-handoff-save pipeline so the
 # main loop only needs to handle the outcome (success/failure). This is the
-# core of what Ralph does each iteration.
-# CALLER: main loop step 4
+# core of what Ralph does each iteration in handoff-only and handoff-plus-index modes.
+# CALLER: main loop step 4 (non-agent-orchestrated modes)
 # SIDE EFFECT: Creates handoff file, updates compaction counters in state.json,
 #              cleans up temp skills file, deletes failure context file on success.
 # Returns: 0 + handoff_file path on stdout, or 1 on failure
@@ -546,12 +669,17 @@ trap shutdown_handler SIGINT SIGTERM
 #      f. Run validation gate
 #      g. Commit or rollback based on validation result
 #      h. Apply plan amendments from handoff
-#      i. Rate-limit delay
+#      i. [agent-orchestrated only] Context post + agent passes
+#      j. Rate-limit delay
 #
 # MODE-SENSITIVE BRANCHING:
-#   - Step 1 (compaction check): only runs in handoff-plus-index mode
-#   - build_coding_prompt_v2() internally varies sections 3-6 by mode
-#   - All other steps are mode-agnostic
+#   - Step c (compaction): handoff-plus-index only
+#   - Step e (coding cycle): agent-orchestrated uses run_agent_coding_cycle()
+#     (context agent → coding agent); other modes use run_coding_cycle()
+#     (bash prompt assembly → coding agent)
+#   - Step i (post-iteration): agent-orchestrated runs context post (knowledge
+#     organization) and optional agent passes (code review, etc.)
+#   - build_coding_prompt_v2() internally varies sections 3-6 by mode (non-agent modes)
 main() {
     parse_args "$@"
     # Save CLI mode before load_config potentially sets RALPH_MODE
@@ -678,7 +806,11 @@ main() {
 
             set_task_status "$PLAN_FILE" "$task_id" "in_progress"
             local handoff_file
-            handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")" || true
+            if [[ "$MODE" == "agent-orchestrated" ]] && declare -f run_agent_coding_cycle >/dev/null 2>&1; then
+                handoff_file="$(run_agent_coding_cycle "$task_json" "$current_iteration")" || true
+            else
+                handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")" || true
+            fi
             set_task_status "$PLAN_FILE" "$task_id" "done"
             if declare -f append_progress_entry >/dev/null 2>&1; then
                 append_progress_entry "$handoff_file" "$current_iteration" "$task_id" || {
@@ -690,22 +822,22 @@ main() {
 
         # === REAL MODE ===
 
-        # Step 1: Knowledge indexing check (handoff-plus-index mode only)
-        # Control-flow integration point: this is the only pre-task branch that
-        # can inject compaction work before checkpoint+coding; failure is non-fatal
-        # so task execution remains forward-progressing.
-        # The trigger evaluation (compaction.sh) checks 4 conditions in priority
-        # order: task metadata > novelty > bytes > periodic.
+        # Step 1: Pre-task context/indexing (mode-dependent)
+        #
+        # MODE BRANCHES:
+        # - handoff-plus-index: trigger-based knowledge indexer (compaction.sh)
+        # - agent-orchestrated: context agent handles this in run_agent_coding_cycle()
+        # - handoff-only: no pre-task processing
         if [[ "$MODE" == "handoff-plus-index" ]]; then
             if check_compaction_trigger "$STATE_FILE" "$task_json"; then
                 log "info" "Knowledge indexing triggered"
-                # Non-fatal: indexing failure should not block the coding iteration.
-                # The coding prompt can still work without updated index.
                 run_knowledge_indexer "$task_json" || {
                     log "warn" "Knowledge indexing failed, continuing"
                 }
             fi
         fi
+        # agent-orchestrated mode: no pre-task compaction — the context agent
+        # runs inside run_agent_coding_cycle() and manages knowledge autonomously.
 
         # Step 2: Mark task as in-progress
         set_task_status "$PLAN_FILE" "$task_id" "in_progress"
@@ -717,18 +849,64 @@ main() {
         checkpoint="$(create_checkpoint)"
         log "info" "Checkpoint: ${checkpoint:0:8}"
 
-        # Step 4: Run the coding cycle (prompt -> CLI -> parse -> save)
+        # Step 4: Run the coding cycle
+        # MODE BRANCH: agent-orchestrated uses the 3-phase agent cycle;
+        # other modes use the bash-assembled prompt cycle.
         local handoff_file=""
-        if ! handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")"; then
+        local coding_cycle_fn="run_coding_cycle"
+        if [[ "$MODE" == "agent-orchestrated" ]] && declare -f run_agent_coding_cycle >/dev/null 2>&1; then
+            coding_cycle_fn="run_agent_coding_cycle"
+        fi
+
+        if ! handoff_file="$($coding_cycle_fn "$task_json" "$current_iteration" 2>"${RALPH_DIR}/context/.cycle-stderr")"; then
             log "error" "Coding cycle failed for $task_id"
+
+            # In agent-orchestrated mode, check if the context agent issued a directive
+            # (skip, human review, research) — these are NOT coding failures.
+            local cycle_stderr=""
+            if [[ -f "${RALPH_DIR}/context/.cycle-stderr" ]]; then
+                cycle_stderr="$(cat "${RALPH_DIR}/context/.cycle-stderr")"
+                rm -f "${RALPH_DIR}/context/.cycle-stderr"
+            fi
+
+            if [[ "$cycle_stderr" == *"DIRECTIVE:skip"* ]]; then
+                log "info" "Context agent directive: skip task $task_id"
+                set_task_status "$PLAN_FILE" "$task_id" "skipped"
+                if declare -f emit_event >/dev/null 2>&1; then
+                    emit_event "iteration_end" "Task $task_id skipped by context agent" \
+                        "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "skipped" \
+                        '{iteration: $iter, task_id: $task_id, result: $result}')"
+                fi
+                log "info" "=== End iteration $current_iteration (skipped) ==="
+                continue
+            elif [[ "$cycle_stderr" == *"DIRECTIVE:request_human_review"* ]]; then
+                log "warn" "Context agent directive: human review needed for $task_id"
+                set_task_status "$PLAN_FILE" "$task_id" "pending"
+                write_state "status" "paused"
+                if declare -f emit_event >/dev/null 2>&1; then
+                    emit_event "pause" "Paused for human review (context agent recommendation)" \
+                        "$(jq -cn --arg task_id "$task_id" '{task_id: $task_id, reason: "context_agent_review"}')"
+                fi
+                log "info" "=== End iteration $current_iteration (paused for review) ==="
+                break
+            elif [[ "$cycle_stderr" == *"DIRECTIVE:research"* ]]; then
+                log "info" "Context agent directive: research needed for $task_id"
+                # Research directive: task stays pending, loop continues to next iteration
+                # where the context agent will have another chance to prepare context.
+                set_task_status "$PLAN_FILE" "$task_id" "pending"
+                if declare -f emit_event >/dev/null 2>&1; then
+                    emit_event "iteration_end" "Research requested for $task_id" \
+                        "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "research_requested" \
+                        '{iteration: $iter, task_id: $task_id, result: $result}')"
+                fi
+                log "info" "=== End iteration $current_iteration (research requested) ==="
+                continue
+            fi
+
             rollback_to_checkpoint "$checkpoint"
-            # Retry transition: return task to pending before `continue` so the
-            # scheduler can pick it again on the next loop pass.
             set_task_status "$PLAN_FILE" "$task_id" "pending"
             increment_retry_count "$PLAN_FILE" "$task_id"
 
-            # Retry gate: re-read count from plan.json AFTER increment to get the
-            # current value (fixes L1: stale task_json snapshot caused off-by-one).
             local retry_count max_retries
             retry_count="$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .retry_count // 0' "$PLAN_FILE")"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
@@ -745,12 +923,17 @@ main() {
             continue
         fi
 
+        # Clean up stderr capture file on success
+        rm -f "${RALPH_DIR}/context/.cycle-stderr"
+
         # Step 5: Run validation gate
         # Branch point: pass path commits + advances plan; fail path rolls back and
         # feeds retry context into the next attempt.
         # Validation strategy (strict/lenient/tests_only) is set in ralph.conf.
         # Results written to .ralph/logs/validation/iter-N.json for failure context.
+        local validation_result="failed"
         if run_validation "$current_iteration"; then
+            validation_result="passed"
             log "info" "Validation PASSED for iteration $current_iteration"
             if declare -f emit_event >/dev/null 2>&1; then
                 emit_event "validation_pass" "Validation passed for iteration $current_iteration" \
@@ -759,9 +942,6 @@ main() {
             fi
 
             # Step 6a: Commit successful iteration
-            # INVARIANT: Commit happens BEFORE task status change, so a crash
-            # between commit and status update results in a committed but
-            # still-in-progress task (recoverable on resume).
             commit_iteration "$current_iteration" "$task_id" "passed validation"
             set_task_status "$PLAN_FILE" "$task_id" "done"
 
@@ -773,9 +953,6 @@ main() {
             fi
 
             # Step 7: Apply plan amendments from handoff (if any)
-            # The coding agent can propose adding, modifying, or removing tasks
-            # based on what it discovers during implementation. Safety guardrails
-            # in plan-ops.sh limit to 3 amendments and protect "done" tasks.
             if [[ -n "$handoff_file" && -f "$handoff_file" ]]; then
                 apply_amendments "$PLAN_FILE" "$handoff_file" "$task_id" || {
                     log "warn" "Amendment application had issues, continuing"
@@ -796,20 +973,13 @@ main() {
                     '{iteration: $iter, task_id: $task_id}')"
             fi
 
-            # Step 6b (failure path): Rollback to checkpoint
-            # INVARIANT: After rollback, working tree matches pre-iteration state.
-            # .ralph/ is excluded from git clean so handoffs and state survive.
             rollback_to_checkpoint "$checkpoint"
-
             increment_retry_count "$PLAN_FILE" "$task_id"
 
-            # Re-read count from plan.json AFTER increment (fixes L1: stale snapshot).
             local retry_count max_retries
             retry_count="$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .retry_count // 0' "$PLAN_FILE")"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
 
-            # Validation-fail retry branch: terminalize when budget is exhausted,
-            # otherwise requeue by setting pending.
             if (( retry_count >= max_retries )); then
                 log "error" "Task $task_id exceeded max retries ($max_retries), marking failed"
                 set_task_status "$PLAN_FILE" "$task_id" "failed"
@@ -818,10 +988,6 @@ main() {
                 set_task_status "$PLAN_FILE" "$task_id" "pending"
             fi
 
-            # Save failure context for the retry iteration's prompt.
-            # This creates a feedback loop: validation output -> failure-context.md
-            # -> consumed by run_coding_cycle() on next attempt -> injected into
-            # ## Failure Context section -> LLM sees what went wrong and fixes it.
             local validation_file=".ralph/logs/validation/iter-${current_iteration}.json"
             if [[ -f "$validation_file" ]]; then
                 local failure_ctx
@@ -836,6 +1002,36 @@ main() {
                 emit_event "iteration_end" "Iteration $current_iteration ended (validation failed)" \
                     "$(jq -cn --arg task_id "$task_id" --argjson iter "$current_iteration" --arg result "validation_failed" \
                     '{iteration: $iter, task_id: $task_id, result: $result}')"
+            fi
+        fi
+
+        # Step 8: Post-iteration agent passes (agent-orchestrated mode only)
+        # Runs AFTER validation regardless of pass/fail — the context agent needs
+        # to see failures too for pattern detection and knowledge organization.
+        if [[ "$MODE" == "agent-orchestrated" ]] && [[ -n "$handoff_file" && -f "$handoff_file" ]]; then
+            # Phase 3: Knowledge organization
+            if declare -f run_context_post >/dev/null 2>&1; then
+                local post_directive
+                post_directive="$(run_context_post "$handoff_file" "$current_iteration" "$task_id" "$validation_result")" || {
+                    log "warn" "Context post-processing failed, continuing"
+                }
+                if [[ -n "$post_directive" ]] && declare -f handle_post_directives >/dev/null 2>&1; then
+                    local post_action
+                    post_action="$(handle_post_directives "$post_directive")"
+                    # Post-processing directives are advisory — logged but the orchestrator
+                    # does not break the loop on them. They inform the NEXT iteration's
+                    # context prep pass via the knowledge index and event stream.
+                    if [[ "$post_action" == "request_human_review" ]]; then
+                        log "warn" "Context post recommends human review — will be visible to next context prep"
+                    fi
+                fi
+            fi
+
+            # Phase 4: Optional agent passes (code review, documentation, etc.)
+            if [[ "${RALPH_AGENT_PASSES_ENABLED:-true}" == "true" ]] && declare -f run_agent_passes >/dev/null 2>&1; then
+                run_agent_passes "$handoff_file" "$current_iteration" "$task_id" "$validation_result" || {
+                    log "warn" "Agent passes had issues, continuing"
+                }
             fi
         fi
 

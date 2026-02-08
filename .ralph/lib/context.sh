@@ -8,7 +8,11 @@ set -euo pipefail
 #   consumed by the LLM in ralph.sh run_coding_cycle().
 # - It also enforces context-budget behavior through section-aware truncation so the
 #   orchestrator preserves high-value context first when prompts are too large.
-# - It supports both operating modes:
+# - Primary prompt assembly (build_coding_prompt_v2) is used in handoff-only and
+#   handoff-plus-index modes. In agent-orchestrated mode, the LLM context agent
+#   (agents.sh) handles prompt assembly instead; this module still provides
+#   estimate_tokens() and load_skills() to that flow.
+# - Supported modes for prompt assembly:
 #   - handoff-only: short-term memory is the previous handoff freeform narrative only.
 #   - handoff-plus-index: includes narrative + structured retrieval from knowledge index.
 #
@@ -52,7 +56,9 @@ set -euo pipefail
 # DEPENDENCIES:
 #   Called by: ralph.sh run_coding_cycle() (build_coding_prompt_v2, truncate_to_budget,
 #             estimate_tokens, load_skills, get_prev_handoff_summary, get_earlier_l1_summaries,
-#             format_compacted_context)
+#             format_compacted_context);
+#             ralph.sh run_agent_coding_cycle() (estimate_tokens, load_skills via
+#             prepare_skills_file — agent-orchestrated mode)
 #   Depends on: jq, awk, log() from ralph.sh
 #   Reads files: .ralph/handoffs/handoff-NNN.json (most recent),
 #                .ralph/knowledge-index.md (in handoff-plus-index mode),
