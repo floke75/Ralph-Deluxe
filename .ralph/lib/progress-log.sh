@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# progress-log.sh — Auto-generated human + machine progress logs
+# progress-log.sh — Synthesized human + machine progress logs
 #
-# PURPOSE: After each successful iteration, extracts progress data from the handoff
-# JSON and appends it to both a markdown log (for humans/LLMs reading the repo) and
-# a JSON log (for the dashboard to poll). The markdown log includes a plan summary
-# table that's regenerated on each append to reflect current task statuses.
+# MODULE OVERVIEW:
+#   Iteration handoff payloads are rich but ephemeral: they describe what happened in a
+#   single pass through the loop, while operators and dashboards need a durable timeline.
+#   This module synthesizes a persistent progress record by combining:
+#     1) Hand-off level execution detail (summary/files/tests/notes/bugs), and
+#     2) Plan-level task state from plan.json (status + aggregate counts).
+#
+#   The result is two coordinated artifacts with shared semantics:
+#     - .ralph/progress-log.md   -> human/LLM-readable narrative + live task table
+#     - .ralph/progress-log.json -> machine-readable feed for polling/visualization
+#
+#   Why synthesize instead of copying raw state?
+#     - Raw handoffs are task-iteration scoped and not directly query-friendly.
+#     - Plan state alone lacks per-iteration rationale and evidence.
+#     - The merged log preserves both accountability (what changed, why) and status
+#       observability (where each task currently stands).
 #
 # DEPENDENCIES:
 #   Called by: ralph.sh main loop step 6b (append_progress_entry), after validation pass
@@ -70,8 +82,24 @@ EOF
     fi
 }
 
-# Format a handoff as a markdown progress entry with all available detail sections.
-# Sections only appear when the handoff has data for them (files, tests, etc.).
+# Format one iteration handoff into a markdown entry body.
+#
+# Data sources:
+#   - Handoff JSON fields: .summary, .files_touched, .tests_added,
+#     .architectural_notes, .constraints_discovered, .deviations,
+#     .bugs_encountered
+#   - Plan/state lookup: task title is resolved from plan.json via get_task_by_id()
+#     when available; otherwise task_id is used as a fallback label.
+#
+# Markdown generation semantics:
+#   - Always emits a section header + summary line.
+#   - Optional sections are emitted only when source arrays are non-empty.
+#   - Section order is stable across runs to keep diffs predictable.
+#   - Output is a standalone markdown fragment consumed by _regenerate_progress_md().
+#
+# Assumptions:
+#   - Missing handoff fields are treated as empty/"No summary" (not errors).
+#   - If plan lookup is unavailable/incomplete, title fallback keeps logging non-blocking.
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
 # Stdout: markdown block (consumed by _regenerate_progress_md)
 format_progress_entry_md() {
@@ -142,7 +170,21 @@ format_progress_entry_md() {
     printf '\n---\n'
 }
 
-# Format a handoff as a JSON progress entry for dashboard consumption.
+# Format one iteration handoff into a normalized JSON entry.
+#
+# Data sources:
+#   - Handoff JSON provides per-iteration detail fields.
+#   - Plan/state lookup resolves title metadata only (task status/counts are injected
+#     separately at file update time via _generate_plan_summary_json()).
+#
+# JSON generation semantics:
+#   - Produces a compact, single-entry object suitable for insertion into .entries[].
+#   - Optional array/object fields are normalized to empty arrays when absent.
+#   - Adds synthesized metadata (timestamp/title/task_id/iteration).
+#   - fully_complete is derived from .task_completed.fully_complete with false default.
+#
+# Assumptions:
+#   - Handoff may be partial; absent keys should not break dashboard ingestion.
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
 # Stdout: compact JSON object
 format_progress_entry_json() {
@@ -177,8 +219,25 @@ format_progress_entry_json() {
         }' "$handoff_file"
 }
 
-# Append a progress entry to both .md and .json files.
-# Deduplicates by (task_id, iteration) in JSON; rebuilds MD from scratch.
+# Append one synthesized progress entry to both .md and .json logs.
+#
+# Update timing in iteration lifecycle:
+#   - Called by ralph.sh step 6b, after iteration validation succeeds.
+#   - Intended to run once per accepted iteration result (not during planning).
+#   - Runs before the next iteration begins so downstream polling sees latest status.
+#
+# Update semantics:
+#   - JSON log: deduplicates by (task_id, iteration), refreshes generated_at,
+#     recomputes plan_summary counts from current plan.json, then appends entry.
+#   - Markdown log: fully regenerated so the summary table always reflects latest
+#     task statuses, then prior entries + new entry are preserved in order.
+#
+# Assumptions about plan/task state:
+#   - Expected task statuses include done, pending, in_progress, failed, skipped.
+#   - Unknown statuses are preserved verbatim in markdown display and excluded from
+#     known aggregate buckets unless matched explicitly.
+#   - Missing/unfinished plan.json is tolerated: empty summaries are emitted and
+#     entry append remains best-effort non-blocking.
 # Args: $1 = handoff file path, $2 = iteration number, $3 = task_id
 # Returns: 0 on success, 1 on failure
 # CALLER: ralph.sh main loop step 6b
@@ -251,8 +310,16 @@ _resolve_task_title() {
     printf '%s' "$title"
 }
 
-# Generate the markdown summary table from plan.json.
-# Includes latest progress entry summary for each task.
+# Generate the markdown summary table from plan.json task state.
+#
+# Data sources used from plan/state:
+#   - plan.json .tasks[].id + .tasks[].status drive table rows.
+#   - progress-log.json .entries provides latest per-task summary snippet.
+#
+# Assumptions about incomplete plans:
+#   - If plan.json is absent, no table rows are emitted.
+#   - If a task has no logged entries yet, summary cell defaults to em dash.
+#   - Status mapping only normalizes known values; others are shown as-is.
 # Stdout: markdown table rows
 _generate_plan_summary_table() {
     local plan_file="${PLAN_FILE:-plan.json}"
@@ -293,6 +360,16 @@ _generate_plan_summary_table() {
 }
 
 # Generate plan summary counts from plan.json for JSON progress log.
+#
+# Assumptions about task status fields:
+#   - done -> completed bucket
+#   - pending + in_progress -> pending bucket (work not yet done)
+#   - failed -> failed bucket
+#   - skipped -> skipped bucket
+#   - Any other status is ignored by bucket counts but still contributes to total_tasks.
+#
+# Incomplete plan handling:
+#   - Missing plan.json yields all-zero summary object so callers can continue.
 # Stdout: JSON object {total_tasks, completed, pending, failed, skipped}
 _generate_plan_summary_json() {
     local plan_file="${PLAN_FILE:-plan.json}"
