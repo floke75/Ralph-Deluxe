@@ -1,6 +1,6 @@
 # Ralph-Deluxe v2 — Implementation Status
 
-**Last verified:** 2026-02-07 (PR 7)
+**Last verified:** 2026-02-08 (PR 8)
 **Verified against:** `ralph-deluxe-v2-revision-plan 2.md`
 
 ---
@@ -125,6 +125,26 @@
 
 ---
 
+## PR 8: Context Engineering Fixes — IMPLEMENTED
+
+**Last verified:** 2026-02-08
+
+| Item | Planned | Status | Notes |
+|------|---------|--------|-------|
+| Mode passthrough in `build_coding_prompt_v2()` | Pass `$mode` to `get_prev_handoff_for_mode()` | Done | Was hardcoded to `"handoff-only"`, silently dropped structured L2 data (deviations, failed bugs, unfinished business) in `handoff-plus-index` mode |
+| Section-aware truncation rewrite | Parse all 8 prompt sections | Done | Old version only parsed 6 sections; `## Retrieved Project Memory` and `## Accumulated Knowledge` were absorbed into `previous_handoff` |
+| Hard constraint supersession fix | Support `[supersedes: K-<type>-<slug>]` format | Done | Old version only checked `Superseded: <full line>` format, which never matched the template-instructed format |
+| Test: L2 structured data in h+i mode | Verify `"Structured context from previous iteration"` present | Done | New test in `context.bats` |
+| Test: L2 absent in handoff-only mode | Verify structured block NOT present | Done | New test in `context.bats` |
+| Test: truncation handles all 8 sections | Verify Retrieved Project Memory and Accumulated Knowledge parsed | Done | New test in `context.bats` |
+| Test: truncation priority ordering | Verify Accumulated Knowledge trimmed before Skills | Done | New test in `context.bats` |
+| Test: supersession via memory ID | Verify `[supersedes: K-constraint-...]` accepted | Done | New test in `compaction.bats` |
+| Test: constraint drop rejection | Verify constraint removal without supersession fails | Done | New test in `compaction.bats` |
+
+**Completion: 100%** — 3 bug fixes, 6 new tests. All 220+ tests pass across 10 test suites.
+
+---
+
 ## Summary
 
 | PR | Description | Status |
@@ -136,3 +156,4 @@
 | PR 5 | Dashboard (read-only) | Implemented |
 | PR 6 | Control plane | Implemented |
 | PR 7 | Documentation | Implemented |
+| PR 8 | Context engineering fixes | Implemented |

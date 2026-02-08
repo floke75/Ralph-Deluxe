@@ -141,6 +141,8 @@ All settings live in `.ralph/config/ralph.conf`. Key settings:
 | `RALPH_VALIDATION_STRATEGY` | strict | Validation mode: `strict`, `lenient`, `tests_only` |
 | `RALPH_COMPACTION_INTERVAL` | 5 | Coding iterations between knowledge indexer passes (handoff-plus-index only) |
 | `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | Byte threshold to trigger knowledge indexing (~8000 tokens) |
+| `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | Term overlap ratio below which the semantic novelty trigger fires |
+| `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | Number of recent handoffs used for novelty comparison |
 | `RALPH_DEFAULT_MAX_TURNS` | 20 | Default max turns per coding iteration |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | Minimum delay between iterations (rate limit protection) |
 | `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | Token budget for assembled context prompts |
@@ -213,7 +215,8 @@ project-root/
 │   ├── compaction.bats
 │   ├── telemetry.bats
 │   ├── cli-ops.bats
-│   └── validation.bats
+│   ├── validation.bats
+│   └── progress-log.bats
 ├── examples/
 │   └── sample-project-plan.json     # Example plan for reference
 ├── CLAUDE.md                        # Project conventions for Claude Code
@@ -227,7 +230,7 @@ Each iteration follows this cycle:
 1. **Process control commands** -- Check for pause/resume/skip-task/inject-note commands from the dashboard
 2. **Read next task** -- Find the first pending task in `plan.json` whose dependencies are satisfied
 3. **Check knowledge indexer** -- In `handoff-plus-index` mode, if thresholds are met, run the knowledge indexer pass
-4. **Assemble context** -- Build the coding prompt: task description, previous handoff narrative, skills, and (in `handoff-plus-index` mode) a pointer to the knowledge index
+4. **Assemble context** -- Build the coding prompt with 8 sections: current task, failure context (retries), retrieved memory (constraints + decisions from latest handoff), previous handoff narrative, retrieved project memory (top-k keyword-matched entries from knowledge index, `handoff-plus-index` mode only), accumulated knowledge pointer, skills, and output instructions. Section-aware truncation trims lower-priority sections first when the prompt exceeds the token budget
 5. **Create git checkpoint** -- Capture `HEAD` so the iteration can be rolled back
 6. **Run coding iteration** -- Invoke `claude -p` with structured output schema, MCP isolation, and skills injection
 7. **Parse handoff** -- Extract the structured handoff JSON (including the freeform narrative)
@@ -251,10 +254,13 @@ Additional structured fields (`task_completed`, `deviations`, `bugs_encountered`
 In `handoff-plus-index` mode, the orchestrator periodically runs a knowledge indexer pass that:
 
 1. Reads all handoffs since the last indexing pass
-2. Updates `.ralph/knowledge-index.md` with categorized entries (constraints, decisions, patterns, gotchas, unresolved issues)
-3. Updates `.ralph/knowledge-index.json` with per-iteration entries for the dashboard
+2. Snapshots existing index files for rollback safety
+3. Updates `.ralph/knowledge-index.md` with categorized entries (constraints, decisions, patterns, gotchas, unresolved issues) using stable memory IDs (`K-<type>-<slug>`) and source provenance
+4. Updates `.ralph/knowledge-index.json` with per-iteration entries for the dashboard
+5. Verifies post-indexing invariants (hard constraint preservation, JSON append-only, no duplicate active IDs, valid supersession references)
+6. Restores snapshot on verification failure
 
-The indexer triggers on the same conditions as the legacy compaction system: periodic interval or byte threshold.
+The indexer triggers on four conditions evaluated in priority order: task metadata (`needs_docs` or `libraries`), semantic novelty (low term overlap between the next task and recent handoff summaries, configurable via `RALPH_NOVELTY_OVERLAP_THRESHOLD`), byte threshold, or periodic interval.
 
 ### Telemetry
 
