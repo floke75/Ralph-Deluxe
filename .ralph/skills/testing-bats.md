@@ -1,3 +1,6 @@
+<!-- Purpose: bats-core testing patterns for shell function and script validation. -->
+<!-- Consumed by: coding-iteration skill loader when tasks include testing-bats, while writing or updating Bats tests. -->
+
 # bats-core Testing Patterns
 
 ## Basic Test Syntax

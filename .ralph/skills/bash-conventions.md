@@ -1,3 +1,6 @@
+<!-- Purpose: concise Bash style and reliability conventions for project scripts. -->
+<!-- Consumed by: coding-iteration skill loader when tasks include bash-conventions, before editing shell modules/tests. -->
+
 # Bash Conventions
 
 ## Script Header

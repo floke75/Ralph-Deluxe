@@ -1,3 +1,6 @@
+<!-- Purpose: reusable jq command patterns for plan, handoff, and state JSON operations. -->
+<!-- Consumed by: coding-iteration skill loader when tasks include jq-patterns, while scripting JSON reads/updates. -->
+
 # jq Patterns for Ralph Deluxe
 
 ## Reading Tasks by Status

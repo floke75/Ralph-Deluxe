@@ -1,3 +1,6 @@
+<!-- Purpose: standard checkpoint/rollback/commit workflow rules for Ralph iterations. -->
+<!-- Consumed by: coding-iteration skill loader when tasks include git-workflow, during iteration lifecycle and commit steps. -->
+
 # Git Workflow for Ralph Deluxe
 
 ## Checkpoint Before Iteration

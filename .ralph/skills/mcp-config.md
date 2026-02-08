@@ -1,3 +1,6 @@
+<!-- Purpose: MCP configuration behavior and tool-usage reference for iteration modes. -->
+<!-- Consumed by: coding/memory orchestration guidance when configuring --strict-mcp-config and selecting mode-specific MCP files. -->
+
 # MCP Configuration Reference
 
 ## Strict Mode

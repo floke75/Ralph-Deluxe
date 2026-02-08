@@ -1,3 +1,6 @@
+<!-- Purpose: reference blueprint for the coding-iteration prompt structure. -->
+<!-- Consumed by: maintainers aligning build_coding_prompt_v2() in .ralph/lib/context.sh, when updating prompt assembly/truncation behavior. -->
+
 <!-- Reference template: documents the prompt structure built by build_coding_prompt_v2() in context.sh.
      This file is NOT read at runtime — the prompt is assembled programmatically.
      Section headers must match exactly (context.sh truncation parses ^## headers).
