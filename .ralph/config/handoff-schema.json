@@ -121,7 +121,8 @@
     },
     "freeform": {
       "type": "string",
-      "description": "Freeform handoff briefing for the next iteration. Write as if briefing a colleague picking up the work tomorrow."
+      "minLength": 50,
+      "description": "Freeform handoff briefing for the next iteration. Write as if briefing a colleague picking up the work tomorrow. Must be substantive (at least 50 chars) — this is the primary context for the next iteration."
     }
   },
   "required": [
@@ -129,6 +130,8 @@
     "deviations",
     "bugs_encountered",
     "architectural_notes",
+    "unfinished_business",
+    "recommendations",
     "files_touched",
     "plan_amendments",
     "tests_added",

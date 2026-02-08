@@ -94,6 +94,12 @@ run_validation() {
 
     mkdir -p "$validation_dir"
 
+    # Guard: warn if no validation commands are configured (fixes H3).
+    # An empty array silently auto-passes validation which can mask real failures.
+    if [[ ${#RALPH_VALIDATION_COMMANDS[@]} -eq 0 ]]; then
+        log "warn" "No validation commands configured — auto-passing validation"
+    fi
+
     local checks_json="[]"
     local cmd output exit_code cmd_type
 
@@ -238,7 +244,8 @@ generate_failure_context() {
         return 0
     fi
 
-    local context="## Validation Failures"
+    # Use ### to avoid conflicting with the parent ## Failure Context header (fixes H4).
+    local context="### Validation Failures"
     local i cmd output truncated
 
     for (( i=0; i<num_failed; i++ )); do

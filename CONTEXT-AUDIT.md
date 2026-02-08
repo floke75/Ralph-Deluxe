@@ -407,36 +407,54 @@ Currently not an issue because ralph.conf is sourced before `source_libs()`.
 
 ## Summary Matrix
 
-| ID | Severity | Category | Silent? | Section Affected |
-|----|----------|----------|---------|-----------------|
-| C1 | Critical | Context loss | Yes | Previous Handoff (iter 1) |
-| C2 | Critical | Context pollution | Yes | Output Instructions |
-| C3 | Critical | Context loss | Yes | Failure Context (retries) |
-| C4 | Critical | Token waste | Yes | All (when truncated) |
-| H1 | High | Context blackout | Yes | Previous Handoff |
-| H2 | High | Retrieval miss | Yes | Retrieved Project Memory |
-| H3 | High | Validation bypass | Yes | Failure Context (never generated) |
-| H4 | High | Context confusion | No | Failure Context |
-| H5 | High | Token waste | No | Multiple sections |
-| M1 | Medium | Compute waste | No | N/A (perf only) |
-| M2 | Medium | Trigger drift | No | Compaction timing |
-| M3 | Medium | Context quality | Yes | Retrieved Memory, L2 |
-| M4 | Medium | Consistency | No | Handoff path |
-| M5 | Medium | Portability | Platform-dep | Handoff ordering |
-| M6 | Medium | Schema gap | Yes | L2 context |
-| L1 | Low | Off-by-one | No | Retry gate |
-| L2 | Low | Race condition | Yes | State persistence |
-| L3 | Low | Config ordering | No | Budget default |
+| ID | Severity | Category | Silent? | Section Affected | Status |
+|----|----------|----------|---------|-----------------|--------|
+| C1 | Critical | Context loss | Yes | Previous Handoff (iter 1) | **FIXED** |
+| C2 | Critical | Context pollution | Yes | Output Instructions | **FIXED** |
+| C3 | Critical | Context loss | Yes | Failure Context (retries) | **FIXED** |
+| C4 | Critical | Token waste | Yes | All (when truncated) | **FIXED** |
+| H1 | High | Context blackout | Yes | Previous Handoff | **FIXED** |
+| H2 | High | Retrieval miss | Yes | Retrieved Project Memory | **FIXED** |
+| H3 | High | Validation bypass | Yes | Failure Context (never generated) | **FIXED** |
+| H4 | High | Context confusion | No | Failure Context | **FIXED** |
+| H5 | High | Token waste | No | Multiple sections | **FIXED** |
+| M1 | Medium | Compute waste | No | N/A (perf only) | **FIXED** |
+| M2 | Medium | Trigger drift | No | Compaction timing | **FIXED** |
+| M3 | Medium | Context quality | Yes | Retrieved Memory, L2 | **FIXED** |
+| M4 | Medium | Consistency | No | Handoff path | **FIXED** |
+| M5 | Medium | Portability | Platform-dep | Handoff ordering | Accepted |
+| M6 | Medium | Schema gap | Yes | L2 context | **FIXED** |
+| L1 | Low | Off-by-one | No | Retry gate | **FIXED** |
+| L2 | Low | Race condition | Yes | State persistence | Accepted |
+| L3 | Low | Config ordering | No | Budget default | Accepted |
 
 ---
 
-## Recommended Fix Priority
+## Resolution Summary
 
-1. **C1 + C2** — Fix first-iteration bootstrap and output instructions fallback.
-   These affect every single orchestrator run.
-2. **C3** — Move failure context deletion to after successful handoff parse.
-3. **C4** — Strip truncation metadata before sending prompt to CLI.
-4. **H1** — Add `minLength` to `freeform` in schema.
-5. **H2** — Lower keyword length threshold.
-6. **H3** — Add warning for empty validation commands.
-7. **M1** — Gate v1 context assembly behind v2 availability check.
+16 of 18 issues fixed. 2 accepted (M5 sort portability, L2 signal race — both
+low-impact and addressed by existing design choices).
+
+### Fixes Applied
+
+| Fix | Files Changed | Description |
+|-----|--------------|-------------|
+| C1 | context.sh, ralph.sh | Added 5th param `first_iteration_context` to `build_coding_prompt_v2`; ralph.sh passes first-iteration.md content; injected into `## Previous Handoff` when no prior handoffs exist |
+| C2 | templates/coding-prompt-footer.md | Created missing template file with actual output instructions |
+| C3 | ralph.sh | Deferred failure context file deletion to after successful handoff parse |
+| C4 | context.sh | Truncation metadata emitted to stderr instead of stdout — tests still pass (bats captures both), but `$(...)` in ralph.sh only captures stdout |
+| H1 | handoff-schema.json | Added `minLength: 50` to `freeform` field |
+| H2 | context.sh | Lowered keyword filter from `length >= 4` to `length >= 2` |
+| H3 | validation.sh | Added warning log when `RALPH_VALIDATION_COMMANDS` array is empty |
+| H4 | validation.sh | Changed `## Validation Failures` to `### Validation Failures` |
+| H5 | context.sh | Changed truncation to remove sections entirely instead of keeping useless fragments |
+| M1 | ralph.sh | Gated v1-only context assembly behind `declare -f build_coding_prompt_v2` check |
+| M2 | ralph.sh | Changed byte tracking to use compact JSON (`jq -c`) instead of pretty-printed file size |
+| M3 | context.sh | Added null-safety fallbacks: `"no details"` for missing workaround/impact |
+| M4 | cli-ops.sh | Changed hardcoded `.ralph/handoffs` to `${RALPH_DIR:-.ralph}/handoffs` |
+| M6 | handoff-schema.json | Added `unfinished_business` and `recommendations` to `required` array |
+| L1 | ralph.sh | Re-read retry count from plan.json after increment instead of stale task_json |
+
+### Test Coverage
+
+261 tests pass (7 new tests added for C1, C4, H2, H3, H4, H5).

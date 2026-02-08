@@ -788,3 +788,123 @@ EOF
     # Retrieved Project Memory should still be present (higher priority than Accumulated Knowledge)
     [[ "$output" == *"Important retrieved knowledge line"* ]]
 }
+
+# --- C1: first-iteration context injection ---
+
+@test "build_coding_prompt_v2 injects first_iteration_context when no handoffs exist" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    rm -f "$TEST_DIR/.ralph/handoffs/"*.json
+    cd "$TEST_DIR"
+
+    local first_iter="This is the first iteration. Please set conventions."
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" "" "$first_iter"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Previous Handoff"* ]]
+    [[ "$output" == *"Please set conventions"* ]]
+    # Should NOT contain the generic first-iteration message
+    [[ "$output" != *"No previous handoff available"* ]]
+}
+
+@test "build_coding_prompt_v2 prefers handoff over first_iteration_context" {
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    mkdir -p "$TEST_DIR/.ralph/handoffs"
+    mkdir -p "$TEST_DIR/.ralph/templates"
+    cp "$TEST_DIR/handoffs/handoff-003.json" "$TEST_DIR/.ralph/handoffs/"
+    cd "$TEST_DIR"
+
+    local first_iter="This is the first iteration. Please set conventions."
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" "" "$first_iter"
+    [[ "$status" -eq 0 ]]
+    # Should contain handoff content, not first-iteration content
+    [[ "$output" == *"git operations module"* ]]
+    [[ "$output" != *"Please set conventions"* ]]
+}
+
+# --- C4: truncation metadata on stderr not stdout ---
+
+@test "truncate_to_budget does not include metadata in stdout content" {
+    local long_text="This is a much longer text that will exceed the budget we set"
+    # Capture stdout only (not stderr) to verify prompt is clean
+    local stdout_only
+    stdout_only="$(truncate_to_budget "$long_text" 5 2>/dev/null)"
+    [[ "$stdout_only" != *"[[TRUNCATION_METADATA]]"* ]]
+    [[ "$stdout_only" == *"This is a much longe"* ]]
+}
+
+# --- H5: full section removal under budget pressure ---
+
+@test "truncate_to_budget removes sections entirely instead of leaving fragments" {
+    local sectioned
+    sectioned=$(cat <<'EOF'
+## Current Task
+ID: TASK-789
+Title: Budget test
+
+Description:
+Desc.
+
+Acceptance Criteria:
+- Pass
+
+## Failure Context
+No failure context.
+
+## Retrieved Memory
+### Constraints
+- C
+
+## Previous Handoff
+Short narrative.
+
+## Skills
+SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL SKILL.
+
+## Output Instructions
+OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT OUT.
+EOF
+)
+
+    # Tight budget that forces section removal
+    run truncate_to_budget "$sectioned" 55
+    [[ "$status" -eq 0 ]]
+    # Sections below the budget cut should be removed entirely.
+    # With budget of 55 tokens (~220 chars), low-priority sections get removed.
+    # Verify the truncation metadata reports section removal.
+    [[ "$output" == *"[[TRUNCATION_METADATA]]"* ]]
+    # At least Skills or Output Instructions should have been removed
+    [[ "$output" == *'"Skills"'* || "$output" == *'"Output Instructions"'* ]]
+}
+
+# --- H2: short keyword matching ---
+
+@test "retrieve_relevant_knowledge matches short terms like jq from title/description" {
+    local task_json
+    task_json='{
+      "id": "TASK-321",
+      "title": "Fix jq bug",
+      "description": "The jq parser has an issue.",
+      "libraries": []
+    }'
+
+    mkdir -p "$TEST_DIR/.ralph"
+    cat > "$TEST_DIR/.ralph/knowledge-index.md" <<'EOF'
+# Knowledge Index
+
+## Constraints
+- jq output must stay JSON-safe for migration logic.
+
+## Patterns
+- Use python for scripting.
+EOF
+
+    run retrieve_relevant_knowledge "$task_json" "$TEST_DIR/.ralph/knowledge-index.md" 12
+    [[ "$status" -eq 0 ]]
+    # Should match "jq" from title/description (now >= 2 chars)
+    [[ "$output" == *"jq output must stay JSON-safe"* ]]
+}
