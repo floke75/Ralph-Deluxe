@@ -237,6 +237,27 @@ Key test coverage:
 - `integration.bats`: full orchestrator cycles, state management, validation flow
 - `validation.bats`: strategy evaluation, command classification, failure context generation
 
+## Dashboard Screenshots
+
+Single command: `bash screenshots/capture.sh` or `npm run screenshots`
+
+| Path | Purpose |
+|------|---------|
+| `screenshots/capture.sh` | Entry point — auto-detects Playwright + Chromium, builds Tailwind CSS if stale, runs capture |
+| `screenshots/take-screenshots.mjs` | Playwright script — installs mock data, starts serve.py, captures 6 views, cleans up |
+| `screenshots/mock-data/` | Mock data files (12 handoffs, plan, state, events, knowledge index, progress log) |
+| `screenshots/tailwind.config.js` | Tailwind config scoped to dashboard.html |
+| `screenshots/tailwind-generated.css` | Built CSS (gitignored-safe to regenerate) |
+| `screenshots/*.png` | Output screenshots |
+
+Environment overrides (all optional): `PLAYWRIGHT_MODULE`, `CHROMIUM_BIN`, `SCREENSHOT_PORT`
+
+Key constraints:
+- External CDN is unreachable — Tailwind CSS is built locally and injected via `page.route()` intercept
+- Chromium requires `--single-process --no-sandbox --disable-gpu --disable-dev-shm-usage` flags
+- Mock data is installed into live paths with `.screenshot-bak` backup/restore — originals are never lost
+- `tailwind.config.js` content path is `../.ralph/dashboard.html` (relative to `screenshots/` dir)
+
 ## Telemetry & Control
 
 - Events: append-only JSONL at `.ralph/logs/events.jsonl`

@@ -1,0 +1,41 @@
+{
+  "task_completed": {
+    "task_id": "TASK-003",
+    "summary": "Implemented git-ops.sh with checkpoint, rollback, and commit functions.",
+    "fully_complete": true
+  },
+  "validation_passed": true,
+  "timestamp": "2026-02-08T09:26:30Z",
+  "deviations": [
+    {
+      "planned": "Use git tags for checkpoints",
+      "actual": "Used git rev-parse HEAD to capture commit hashes directly",
+      "reason": "Simpler and avoids tag namespace pollution"
+    }
+  ],
+  "bugs_encountered": [
+    {
+      "description": "git clean -fd was removing .ralph/state.json",
+      "resolution": "Added --exclude=.ralph/ to git clean command",
+      "resolved": true
+    }
+  ],
+  "architectural_notes": [
+    "Always auto-commit before iteration starts, creating clean reset points",
+    "git clean -fd is essential — reset --hard alone doesn't remove new untracked files"
+  ],
+  "files_touched": [
+    { "path": ".ralph/lib/git-ops.sh", "action": "created" },
+    { "path": "tests/git-ops.bats", "action": "created" },
+    { "path": ".gitignore", "action": "modified" }
+  ],
+  "constraints_discovered": [
+    {
+      "constraint": "git clean -fd removes files matching .gitignore patterns",
+      "impact": "Runtime state files must be explicitly excluded from clean",
+      "workaround": "Use git clean -fd --exclude=.ralph/"
+    }
+  ],
+  "summary": "Implemented git-ops.sh with checkpoint, rollback, and commit functions.",
+  "freeform": "Built the git operations module from scratch. The main decisions were using rev-parse HEAD instead of tags for checkpoints (simpler, avoids namespace pollution) and adding git clean -fd to rollback (reset --hard alone misses untracked files). One gotcha: git clean removes .gitignore-matched files too, so we need --exclude=.ralph/ to protect runtime state. All three bats tests pass. Next iteration should wire git-ops into the main loop's checkpoint/rollback cycle."
+}

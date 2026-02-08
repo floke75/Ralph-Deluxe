@@ -1,0 +1,10 @@
+{
+  "current_iteration": 12,
+  "last_compaction_iteration": 10,
+  "coding_iterations_since_compaction": 2,
+  "total_handoff_bytes_since_compaction": 8400,
+  "last_task_id": "TASK-008",
+  "started_at": "2026-02-08T09:15:00Z",
+  "status": "running",
+  "mode": "handoff-plus-index"
+}
