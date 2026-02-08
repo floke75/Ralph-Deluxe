@@ -1,20 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cli-ops.sh — Claude Code CLI integration for Ralph Deluxe
-# Wraps claude -p invocations for coding and memory iterations,
-# parses structured handoff output, and manages handoff file storage.
+# cli-ops.sh — Claude Code CLI invocation and response parsing
+#
+# PURPOSE: Isolates all direct interaction with the `claude` CLI binary. Two
+# invocation modes: coding iterations (handoff schema + coding MCP) and memory
+# iterations (memory schema + memory MCP). Handles response envelope parsing
+# and handoff file persistence.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh run_coding_cycle(), run_compaction_cycle()
+#              compaction.sh run_knowledge_indexer()
+#   Depends on: `claude` CLI binary on PATH, jq, log() from ralph.sh
+#   Reads files: .ralph/config/handoff-schema.json, .ralph/config/memory-output-schema.json,
+#                .ralph/config/mcp-coding.json, .ralph/config/mcp-memory.json
+#   Globals read: RALPH_SKIP_PERMISSIONS, DRY_RUN, RALPH_COMPACTION_MAX_TURNS
+#
+# DATA FLOW:
+#   run_coding_iteration(prompt, task_json, skills_file)
+#     → raw JSON envelope from claude CLI
+#     → parse_handoff_output() extracts .result string → re-parses as JSON
+#     → save_handoff() writes to .ralph/handoffs/handoff-NNN.json
+#     → extract_response_metadata() pulls cost/duration for logging
+#
+# CRITICAL: The claude CLI wraps structured output in a JSON envelope:
+# {type, subtype, cost_usd, duration_ms, is_error, num_turns, result}.
+# The "result" field contains the handoff JSON AS A STRING — requires double-parse.
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# Invoke claude -p with coding MCP config for a coding iteration.
-# Args: $1 = prompt, $2 = task JSON, $3 = skills file path (optional)
-# Globals: RALPH_SKIP_PERMISSIONS, DRY_RUN
-# Stdout: raw JSON response from claude CLI
+# Invoke claude for a coding iteration with task-specific config.
+# The prompt is piped to stdin; skills are injected via --append-system-prompt-file.
+# Args: $1 = prompt, $2 = task JSON (for max_turns), $3 = skills file path (optional)
+# Stdout: raw JSON response envelope from claude CLI
 # Returns: 0 on success, 1 on CLI failure
+# SIDE EFFECT: In real mode, Claude executes code and modifies the working tree.
 run_coding_iteration() {
     local prompt="$1"
     local task_json="$2"
@@ -55,11 +78,13 @@ run_coding_iteration() {
     echo "$response"
 }
 
-# Invoke claude -p with memory MCP config for a compaction/memory iteration.
+# Invoke claude for a memory/indexer iteration with memory-specific config.
+# Used by legacy compaction (run_compaction_cycle) and knowledge indexer.
 # Args: $1 = prompt
-# Globals: RALPH_SKIP_PERMISSIONS, RALPH_COMPACTION_MAX_TURNS, DRY_RUN
-# Stdout: raw JSON response from claude CLI
+# Stdout: raw JSON response envelope from claude CLI
 # Returns: 0 on success, 1 on CLI failure
+# SIDE EFFECT: In handoff-plus-index mode, Claude writes knowledge-index.{md,json}
+# directly via its built-in file tools during this call.
 run_memory_iteration() {
     local prompt="$1"
 
@@ -92,12 +117,12 @@ run_memory_iteration() {
     echo "$response"
 }
 
-# Extract structured handoff output from Claude's JSON response envelope.
-# Claude --output-format json wraps result in a JSON envelope;
-# the structured output is in the "result" field as a JSON string.
+# Extract the structured handoff from Claude's response envelope.
+# The envelope has .result as a JSON STRING requiring a second parse step.
 # Args: $1 = raw JSON response string
-# Stdout: parsed handoff JSON
-# Returns: 0 on success, 1 on parse failure
+# Stdout: parsed handoff JSON object
+# Returns: 0 on success, 1 if .result is missing/empty/invalid JSON
+# CALLERS: ralph.sh run_coding_cycle(), run_compaction_cycle()
 parse_handoff_output() {
     local response="$1"
 
@@ -112,7 +137,7 @@ parse_handoff_output() {
         return 1
     fi
 
-    # Validate it's valid JSON
+    # Validate the inner JSON is well-formed
     echo "$result" | jq . >/dev/null 2>&1 || {
         log "error" "Result is not valid JSON"
         return 1
@@ -121,10 +146,11 @@ parse_handoff_output() {
     echo "$result"
 }
 
-# Write handoff JSON to a numbered file in the handoffs directory.
+# Persist handoff JSON to a zero-padded numbered file.
+# File naming: handoff-001.json, handoff-002.json, etc.
 # Args: $1 = handoff JSON string, $2 = iteration number
-# Stdout: path to the saved file
-# Returns: 0 on success
+# Stdout: path to saved file (consumed by ralph.sh for progress logging + byte tracking)
+# SIDE EFFECT: Creates .ralph/handoffs/ if absent, writes file.
 save_handoff() {
     local handoff_json="$1"
     local iteration="$2"
@@ -138,9 +164,9 @@ save_handoff() {
     echo "$handoff_file"
 }
 
-# Extract metadata (cost, duration, turns, error status) from the CLI response.
+# Pull cost/duration/turns from the claude response envelope for telemetry.
 # Args: $1 = raw JSON response string
-# Stdout: JSON object with cost_usd, duration_ms, num_turns, is_error
+# Stdout: JSON object {cost_usd, duration_ms, num_turns, is_error}
 extract_response_metadata() {
     local response="$1"
     echo "$response" | jq '{

@@ -1,8 +1,35 @@
 #!/usr/bin/env bash
-# plan-ops.sh — Plan reading and mutation functions for Ralph Deluxe
+# plan-ops.sh — Task plan reading and mutation
+#
+# PURPOSE: Manages plan.json — the task queue that drives the orchestrator. Handles
+# task selection (with dependency resolution), status transitions, and plan amendments
+# proposed by coding iterations. Amendments allow the coding agent to add, modify, or
+# remove tasks based on what it discovers during implementation.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh main loop (get_next_task, set_task_status, apply_amendments,
+#             is_plan_complete, count_remaining_tasks)
+#             telemetry.sh (set_task_status for skip-task command)
+#             progress-log.sh (get_task_by_id for title resolution)
+#   Depends on: jq, log() from ralph.sh
+#   Files read/written: plan.json (project root)
+#
+# DATA FLOW:
+#   get_next_task() → finds first "pending" task with all depends_on satisfied
+#   set_task_status() → transitions task status (pending→in_progress→done/failed/skipped)
+#   apply_amendments() → reads .plan_amendments[] from handoff JSON, mutates plan.json
+#     Safety: max 3 amendments per iteration, cannot modify current task status,
+#     cannot remove "done" tasks, creates plan.json.bak before mutation
+#
+# INVARIANTS:
+#   - Task status transitions: pending → in_progress → done|failed
+#   - Tasks with unmet depends_on are never returned by get_next_task()
+#   - Completed ("done") tasks are never removed by apply_amendments()
+#   - At most 3 amendments per iteration (prevents runaway plan mutation)
 
 # Return the first pending task whose dependencies are all satisfied (status "done").
 # Outputs the full task JSON object, or empty string if none found.
+# CALLER: ralph.sh main loop, to select the next task for the iteration.
 get_next_task() {
     local plan_file="${1:-plan.json}"
     jq -c '
@@ -17,7 +44,10 @@ get_next_task() {
     ' "$plan_file"
 }
 
-# Update a task's status in plan.json. Uses safe temp-file pattern.
+# Update a task's status in plan.json. Uses temp-file-then-rename for atomicity.
+# Args: $1 = plan file, $2 = task ID, $3 = new status
+# SIDE EFFECT: Mutates plan.json on disk.
+# CALLERS: ralph.sh main loop, telemetry.sh skip-task handler
 set_task_status() {
     local plan_file="$1"
     local task_id="$2"
@@ -31,14 +61,27 @@ set_task_status() {
 }
 
 # Retrieve a task's full JSON by ID.
+# CALLER: progress-log.sh _resolve_task_title(), for display purposes.
 get_task_by_id() {
     local plan_file="$1"
     local task_id="$2"
     jq -c --arg id "$task_id" '.tasks[] | select(.id == $id)' "$plan_file"
 }
 
-# Process plan_amendments array from a handoff JSON file.
-# Applies add/modify/remove operations with safety guardrails.
+# Process plan_amendments from a handoff JSON and apply to plan.json.
+# Supports add/modify/remove operations with safety guardrails.
+#
+# SAFETY GUARDRAILS:
+#   - Max 3 amendments per iteration (rejects entire batch if exceeded)
+#   - Cannot modify the currently executing task's status
+#   - Cannot remove tasks with status "done"
+#   - add requires id, title, description; defaults provided for optional fields
+#   - All mutations logged to .ralph/logs/amendments.log
+#
+# Args: $1 = plan file, $2 = handoff file, $3 = current task ID (optional)
+# Returns: 0 on success (even if individual amendments rejected), 1 if batch rejected
+# SIDE EFFECT: Creates plan.json.bak before first mutation.
+# CALLER: ralph.sh main loop step 7, after validation passes.
 apply_amendments() {
     local plan_file="$1"
     local handoff_file="$2"
@@ -206,7 +249,8 @@ apply_amendments() {
     return 0
 }
 
-# Return 0 if all tasks have status "done" or "skipped", 1 otherwise.
+# Return 0 if all tasks have terminal status ("done" or "skipped"), 1 otherwise.
+# CALLER: ralph.sh main loop, to decide whether to exit.
 is_plan_complete() {
     local plan_file="${1:-plan.json}"
     local remaining
@@ -218,7 +262,8 @@ is_plan_complete() {
     fi
 }
 
-# Return count of pending + failed tasks.
+# Return count of tasks that still need work (pending + failed).
+# Used for logging and progress display; does not include "skipped".
 count_remaining_tasks() {
     local plan_file="${1:-plan.json}"
     jq '[.tasks[] | select(.status == "pending" or .status == "failed")] | length' "$plan_file"

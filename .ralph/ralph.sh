@@ -2,9 +2,92 @@
 # shellcheck disable=SC1091
 set -euo pipefail
 
-# Ralph Deluxe — Bash orchestrator for Claude Code CLI
-# Drives structured task plans with git-backed rollback,
-# validation gates, and hierarchical context management.
+###############################################################################
+# ralph.sh — Main orchestrator for Ralph Deluxe
+#
+# PURPOSE:
+#   Drives Claude Code CLI through a structured task plan (plan.json). Each
+#   coding iteration produces a freeform handoff narrative that becomes the
+#   primary context for the next iteration, creating a chain of LLM-to-LLM
+#   briefings. The orchestrator wraps each iteration in a git checkpoint so
+#   failed validations can be atomically rolled back.
+#
+# DEPENDENCIES:
+#   Sourced modules (.ralph/lib/):
+#     cli-ops.sh    — run_coding_iteration(), run_memory_iteration(),
+#                     parse_handoff_output(), save_handoff(), extract_response_metadata()
+#     context.sh    — build_coding_prompt_v2(), truncate_to_budget(), estimate_tokens(),
+#                     load_skills(), get_prev_handoff_summary(), get_prev_handoff_for_mode(),
+#                     get_earlier_l1_summaries(), format_compacted_context(),
+#                     retrieve_relevant_knowledge()
+#     validation.sh — run_validation(), generate_failure_context()
+#     git-ops.sh    — create_checkpoint(), rollback_to_checkpoint(),
+#                     commit_iteration(), ensure_clean_state()
+#     plan-ops.sh   — get_next_task(), set_task_status(), apply_amendments(),
+#                     is_plan_complete(), count_remaining_tasks()
+#     compaction.sh — check_compaction_trigger(), run_knowledge_indexer(),
+#                     build_compaction_input(), update_compaction_state(), extract_l1()
+#     telemetry.sh  — emit_event(), init_control_file(), check_and_handle_commands()
+#     progress-log.sh — init_progress_log(), append_progress_entry()
+#
+#   External tools: jq, git, claude CLI, date, wc, mktemp
+#   Config files:   .ralph/config/ralph.conf (shell-sourced key=value)
+#   Templates:      .ralph/templates/{coding-prompt.md, memory-prompt.md,
+#                   knowledge-index-prompt.md, first-iteration.md,
+#                   coding-prompt-footer.md}
+#
+# DATA FLOW (per iteration):
+#   plan.json --[get_next_task]--> task_json
+#     --> build_coding_prompt_v2() assembles 8-section prompt
+#       --> truncate_to_budget() trims to RALPH_CONTEXT_BUDGET_TOKENS
+#         --> run_coding_iteration() pipes prompt to claude CLI
+#           --> parse_handoff_output() double-parses response envelope
+#             --> save_handoff() writes .ralph/handoffs/handoff-NNN.json
+#               --> run_validation() runs configured checks
+#                 --> commit_iteration() or rollback_to_checkpoint()
+#
+# STATE MANAGEMENT (.ralph/state.json):
+#   Persists across iterations and restarts. Key fields:
+#     current_iteration              — monotonic counter, drives handoff file naming
+#     status                         — running|complete|interrupted|blocked|max_iterations_reached
+#     mode                           — handoff-only|handoff-plus-index
+#     last_task_id                   — for resume context
+#     coding_iterations_since_compaction — drives periodic compaction trigger
+#     total_handoff_bytes_since_compaction — drives byte-threshold compaction trigger
+#     last_compaction_iteration      — reset point for compaction counters
+#   All writes use temp-file-then-rename via write_state() for atomicity.
+#
+# OPERATING MODES:
+#   handoff-only (default):
+#     The freeform handoff narrative IS the memory. No knowledge indexer runs.
+#     Simpler, lower cost, sufficient for short-to-medium task plans.
+#   handoff-plus-index:
+#     Adds a periodic knowledge indexer (compaction.sh) that distills handoff
+#     data into .ralph/knowledge-index.{md,json}. Prompt includes keyword-matched
+#     retrieval from the index. Better for long plans where narrative alone
+#     would lose early decisions. Indexer runs are trigger-gated (metadata,
+#     novelty, bytes, periodic) and post-verified with rollback on failure.
+#   Priority: CLI --mode > RALPH_MODE in ralph.conf > default "handoff-only"
+#
+# MAIN LOOP STEPS (numbered, matching code comments):
+#   1. Check compaction trigger (handoff-plus-index only) → run_knowledge_indexer()
+#   2. Mark task in_progress in plan.json
+#   3. Create git checkpoint (SHA stored for potential rollback)
+#   4. Run coding cycle: prompt assembly → CLI invocation → parse → save handoff
+#   5. Run validation gate (configured commands + strategy)
+#   6a. On validation pass: commit, mark done, update progress log
+#   6b. On validation fail: rollback to checkpoint, increment retry, save failure context
+#   7. Apply plan amendments from handoff (add/modify/remove tasks)
+#   8. Rate-limit delay between iterations
+#
+# SIGNAL HANDLING:
+#   SIGINT/SIGTERM → shutdown_handler() saves state as "interrupted", exits 130.
+#   Reentrant guard prevents double-shutdown during cleanup.
+#
+# TESTING:
+#   The `if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi` guard at
+#   EOF allows bats tests to source this file without triggering main().
+###############################################################################
 
 ###############################################################################
 # Constants and defaults
@@ -25,6 +108,9 @@ MODE=""  # handoff-only | handoff-plus-index (set by CLI, config, or default)
 ###############################################################################
 # Logging
 ###############################################################################
+
+# Maps log level names to numeric values for threshold comparison.
+# CALLER: log()
 _log_level_num() {
     case "$1" in
         debug) echo 0 ;;
@@ -35,6 +121,10 @@ _log_level_num() {
     esac
 }
 
+# Central logging function used by ALL modules (sourced modules call log()
+# which resolves to this definition). Writes to both file and stderr.
+# Every library module has a stub that's overridden when ralph.sh sources it.
+# SIDE EFFECT: Creates log directory if absent. Appends to LOG_FILE.
 log() {
     local level="$1"
     shift
@@ -61,6 +151,7 @@ log() {
 ###############################################################################
 # CLI argument parsing
 ###############################################################################
+
 usage() {
     cat <<EOF
 Usage: ralph.sh [OPTIONS]
@@ -76,6 +167,9 @@ Options:
 EOF
 }
 
+# WHY: CLI flags must override config file values, so we capture MODE before
+# load_config() runs, then apply priority in main().
+# CALLER: main()
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -119,6 +213,12 @@ parse_args() {
 ###############################################################################
 # Configuration loading
 ###############################################################################
+
+# WHY: ralph.conf is a shell file sourced directly, so its variables (RALPH_MODE,
+# RALPH_MAX_ITERATIONS, etc.) become globals. This must run AFTER parse_args()
+# so CLI flags can take precedence in main().
+# CALLER: main()
+# SIDE EFFECT: Sets globals from ralph.conf (RALPH_MODE, RALPH_VALIDATION_COMMANDS, etc.)
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         # shellcheck source=config/ralph.conf
@@ -134,6 +234,8 @@ load_config() {
 ###############################################################################
 STATE_FILE="${RALPH_DIR}/state.json"
 
+# Read a single key from state.json. Returns raw jq output (string, number, etc.).
+# CALLER: main loop, run_coding_cycle() (for byte/iteration counters)
 read_state() {
     if [[ -f "$STATE_FILE" ]]; then
         jq -r ".$1" "$STATE_FILE"
@@ -143,6 +245,11 @@ read_state() {
     fi
 }
 
+# Update a single key in state.json atomically (temp-file-then-rename).
+# WHY: The jq expression auto-coerces value types (number, bool, null, string)
+# because state.json stores mixed types and callers pass everything as strings.
+# CALLER: main loop (status, iteration, mode), run_coding_cycle() (byte/iteration counters)
+# SIDE EFFECT: Rewrites STATE_FILE via atomic rename.
 write_state() {
     local key="$1"
     local value="$2"
@@ -155,6 +262,13 @@ write_state() {
 ###############################################################################
 # Source library modules
 ###############################################################################
+
+# WHY: Modules are sourced after config load so they can read config globals
+# (RALPH_CONTEXT_BUDGET_TOKENS, RALPH_COMPACTION_INTERVAL, etc.) at source time.
+# Glob-based sourcing means new modules are auto-discovered.
+# CALLER: main(), after load_config()
+# SIDE EFFECT: Defines all functions from .ralph/lib/*.sh in current shell.
+# INVARIANT: log() must be defined before this runs (modules call log() at source time).
 source_libs() {
     local lib_dir="${RALPH_DIR}/lib"
     if [[ -d "$lib_dir" ]]; then
@@ -173,6 +287,13 @@ source_libs() {
 ###############################################################################
 # Helper: write combined skills to a temp file for --append-system-prompt-file
 ###############################################################################
+
+# WHY: The claude CLI's --append-system-prompt-file flag requires a file path,
+# not inline content. This bridges context.sh's load_skills() (which returns
+# a string) to cli-ops.sh's run_coding_iteration() (which needs a file).
+# CALLER: run_coding_cycle()
+# SIDE EFFECT: Creates a temp file that the caller must clean up.
+# Depends on: load_skills() from context.sh
 prepare_skills_file() {
     local task_json="$1"
     local skills_content
@@ -190,6 +311,14 @@ prepare_skills_file() {
 ###############################################################################
 # Helper: build memory agent prompt from template + compaction input
 ###############################################################################
+
+# WHY: The legacy compaction cycle (run_compaction_cycle below) uses a different
+# prompt than the knowledge indexer. This builds the memory-agent prompt from
+# the template plus handoff data. In handoff-plus-index mode, the knowledge
+# indexer uses build_indexer_prompt() in compaction.sh instead.
+# CALLER: run_compaction_cycle()
+# Depends on: .ralph/templates/memory-prompt.md (optional), task metadata for
+#             Context7 library documentation queries
 build_memory_prompt() {
     local compaction_input="$1"
     local task_json="${2:-}"
@@ -203,6 +332,7 @@ build_memory_prompt() {
     prompt+="## Handoff Data to Compact"$'\n'
     prompt+="$compaction_input"
 
+    # Inject library documentation request when task needs external API docs
     if [[ -n "$task_json" ]]; then
         local needs_docs libraries
         needs_docs=$(echo "$task_json" | jq -r '.needs_docs // false')
@@ -218,8 +348,17 @@ build_memory_prompt() {
 }
 
 ###############################################################################
-# Helper: run a complete compaction cycle
+# Helper: run a complete compaction cycle (legacy, used in handoff-only mode)
 ###############################################################################
+
+# WHY: This is the LEGACY compaction path, kept for backward compatibility.
+# In handoff-plus-index mode, run_knowledge_indexer() (compaction.sh) is used
+# instead. This function invokes Claude as a memory agent to produce compacted
+# context JSON, which was the pre-knowledge-index approach.
+# CALLER: Not actively called in current flow; kept for test compatibility.
+# SIDE EFFECT: Writes .ralph/context/compacted-latest.json and compaction-history/
+# Depends on: build_compaction_input(), run_memory_iteration(), parse_handoff_output(),
+#             update_compaction_state(), extract_response_metadata() from cli-ops.sh/compaction.sh
 run_compaction_cycle() {
     local task_json="${1:-}"
     log "info" "--- Compaction cycle start ---"
@@ -247,7 +386,7 @@ run_compaction_cycle() {
         return 1
     fi
 
-    # Save compacted context
+    # Save compacted context (both "latest" pointer and timestamped archive)
     mkdir -p "${RALPH_DIR}/context/compaction-history"
     local iter
     iter="$(read_state "current_iteration")"
@@ -255,10 +394,9 @@ run_compaction_cycle() {
     echo "$compacted_json" | jq . > "${RALPH_DIR}/context/compaction-history/compacted-iter-${iter}.json"
     log "info" "Saved compacted context"
 
-    # Update state
+    # Reset compaction counters so trigger doesn't fire immediately next iteration
     update_compaction_state "$STATE_FILE"
 
-    # Log metadata
     local metadata
     metadata="$(extract_response_metadata "$raw_response")"
     log "info" "Memory iteration metadata: $metadata"
@@ -267,33 +405,49 @@ run_compaction_cycle() {
 }
 
 ###############################################################################
-# Helper: run a complete coding iteration cycle (prompt → CLI → parse → save)
+# Helper: run a complete coding iteration cycle (prompt -> CLI -> parse -> save)
 ###############################################################################
+
+# WHY: Encapsulates the entire prompt-assembly-to-handoff-save pipeline so the
+# main loop only needs to handle the outcome (success/failure). This is the
+# core of what Ralph does each iteration.
+# CALLER: main loop step 4
+# SIDE EFFECT: Creates handoff file, updates compaction counters in state.json,
+#              cleans up temp skills file.
+# Returns: 0 + handoff_file path on stdout, or 1 on failure
+# Depends on: prepare_skills_file(), format_compacted_context() [context.sh],
+#             get_prev_handoff_summary(), get_earlier_l1_summaries() [context.sh],
+#             build_coding_prompt_v2() or build_coding_prompt() [context.sh],
+#             truncate_to_budget(), estimate_tokens() [context.sh],
+#             run_coding_iteration(), parse_handoff_output(), save_handoff(),
+#             extract_response_metadata() [cli-ops.sh]
 run_coding_cycle() {
     local task_json="$1"
     local current_iteration="$2"
     local task_id
     task_id="$(echo "$task_json" | jq -r '.id // "unknown"')"
 
-    # Assemble context
+    # --- Assemble context components ---
     local skills_file compacted_context prev_handoff prompt
 
     skills_file="$(prepare_skills_file "$task_json")"
 
-    # Get compacted context if available
+    # Legacy compacted context (from run_compaction_cycle, not knowledge indexer)
     compacted_context=""
     if [[ -f "${RALPH_DIR}/context/compacted-latest.json" ]]; then
         compacted_context="$(format_compacted_context "${RALPH_DIR}/context/compacted-latest.json")"
     fi
 
-    # Get previous handoff summary
+    # L2 summary from most recent handoff (used by legacy v1 prompt builder)
     prev_handoff="$(get_prev_handoff_summary "${RALPH_DIR}/handoffs")"
 
-    # Get earlier L1 summaries (iterations 2-3 back)
+    # L1 summaries from 2nd/3rd most recent handoffs (v1 builder only)
     local earlier_l1=""
     earlier_l1="$(get_earlier_l1_summaries "${RALPH_DIR}/handoffs")"
 
-    # Check for failure context from a previous failed validation attempt
+    # Failure context from a previous failed validation — consumed once then deleted.
+    # This creates the retry feedback loop: validation output -> failure context ->
+    # next iteration's ## Failure Context section -> LLM fixes the issue.
     local failure_context=""
     local failure_ctx_file="${RALPH_DIR}/context/failure-context.md"
     if [[ -f "$failure_ctx_file" ]]; then
@@ -302,32 +456,36 @@ run_coding_cycle() {
         log "info" "Injecting failure context from previous attempt"
     fi
 
-    # Collect skills content
     local skills_content=""
     if [[ -n "$skills_file" && -f "$skills_file" ]]; then
         skills_content="$(cat "$skills_file")"
     fi
 
-    # Use first-iteration template if this is iteration 1
+    # First-iteration bootstrap: inject project onboarding context that only
+    # matters for the very first coding pass (no prior handoffs exist yet).
     if [[ "$current_iteration" -eq 1 && -f "${RALPH_DIR}/templates/first-iteration.md" ]]; then
         local first_iter_content
         first_iter_content="$(cat "${RALPH_DIR}/templates/first-iteration.md")"
         compacted_context="${first_iter_content}"$'\n\n'"${compacted_context}"
     fi
 
-    # Build prompt — use mode-aware v2 if available, else fall back to v1
+    # --- Build prompt ---
+    # CRITICAL: Prefer v2 (mode-aware, 8-section) over v1 (legacy).
+    # The declare -f guard enables graceful degradation if context.sh is an
+    # older version that only has build_coding_prompt().
     if declare -f build_coding_prompt_v2 >/dev/null 2>&1; then
         prompt="$(build_coding_prompt_v2 "$task_json" "$MODE" "$skills_content" "$failure_context")"
     else
         prompt="$(build_coding_prompt "$task_json" "$compacted_context" "$prev_handoff" "$skills_content" "$failure_context" "$earlier_l1")"
     fi
 
-    # Apply token budget truncation
+    # Section-aware truncation: trims lowest-priority sections first to fit
+    # within RALPH_CONTEXT_BUDGET_TOKENS. See context.sh for priority order.
     prompt="$(truncate_to_budget "$prompt")"
 
     log "info" "Prompt assembled ($(estimate_tokens "$prompt") estimated tokens)"
 
-    # Run the coding iteration via Claude CLI
+    # --- Invoke Claude CLI ---
     local raw_response
     if ! raw_response="$(run_coding_iteration "$prompt" "$task_json" "$skills_file")"; then
         log "error" "Coding iteration failed for $task_id"
@@ -335,44 +493,49 @@ run_coding_cycle() {
         return 1
     fi
 
-    # Clean up skills temp file
     [[ -n "$skills_file" && -f "$skills_file" ]] && rm -f "$skills_file"
 
-    # Parse the structured handoff output
+    # --- Parse and save handoff ---
+    # Double-parse: Claude's response envelope has .result as a JSON string
+    # (see cli-ops.sh parse_handoff_output for details).
     local handoff_json
     if ! handoff_json="$(parse_handoff_output "$raw_response")"; then
         log "error" "Failed to parse handoff output for $task_id"
         return 1
     fi
 
-    # Save the handoff
     local handoff_file
     handoff_file="$(save_handoff "$handoff_json" "$current_iteration")"
 
-    # Update handoff byte tracking for compaction triggers
+    # --- Update compaction trigger counters ---
+    # These accumulate between compaction runs; check_compaction_trigger()
+    # in compaction.sh reads them to decide whether to fire.
     local handoff_bytes
     handoff_bytes="$(wc -c < "$handoff_file" | tr -d ' ')"
     local prev_bytes
     prev_bytes="$(read_state "total_handoff_bytes_since_compaction")"
     write_state "total_handoff_bytes_since_compaction" "$(( prev_bytes + handoff_bytes ))"
 
-    # Increment coding iterations since compaction
     local prev_iters
     prev_iters="$(read_state "coding_iterations_since_compaction")"
     write_state "coding_iterations_since_compaction" "$(( prev_iters + 1 ))"
 
-    # Log response metadata
     local metadata
     metadata="$(extract_response_metadata "$raw_response")"
     log "info" "Coding iteration metadata: $metadata"
 
-    # Return handoff file path via stdout
+    # Return handoff file path via stdout (caller captures it)
     echo "$handoff_file"
 }
 
 ###############################################################################
 # Helper: increment retry count for a task in the plan
 ###############################################################################
+
+# WHY: Retry tracking lives in plan.json alongside the task, not in state.json,
+# because retries are per-task (a task may be retried while others succeed).
+# CALLER: main loop on coding cycle failure or validation failure
+# SIDE EFFECT: Mutates plan.json via temp-file-then-rename.
 increment_retry_count() {
     local plan_file="$1"
     local task_id="$2"
@@ -388,12 +551,21 @@ increment_retry_count() {
 ###############################################################################
 SHUTTING_DOWN=false
 
+# WHY: Without this, SIGINT during a claude CLI call would leave state.json
+# with status "running" and the repo in an unknown state. The handler ensures
+# state reflects the interruption so --resume can recover.
+# INVARIANT: Must set SHUTTING_DOWN=true before any other work to prevent
+# reentrant calls (signal can arrive during log/write_state).
+# SIDE EFFECT: Sets state status to "interrupted", emits telemetry event, exits 130.
 shutdown_handler() {
+    # Reentrant guard — signal can arrive during cleanup
     if [[ "$SHUTTING_DOWN" == "true" ]]; then
         return
     fi
     SHUTTING_DOWN=true
     log "warn" "Received shutdown signal, saving state and exiting"
+    # Guard emit_event with declare -f: telemetry.sh may not be sourced yet
+    # if signal arrives during startup
     if declare -f emit_event >/dev/null 2>&1; then
         emit_event "orchestrator_end" "Shutdown signal received" '{"reason":"signal"}' || true
     fi
@@ -407,11 +579,35 @@ trap shutdown_handler SIGINT SIGTERM
 ###############################################################################
 # Main loop
 ###############################################################################
+
+# Orchestrator entry point. Parses args, loads config, sources modules, then
+# iterates through plan.json tasks until complete, max iterations, or signal.
+#
+# CONTROL FLOW OVERVIEW:
+#   1. parse_args + load_config + resolve MODE priority
+#   2. source_libs (all .ralph/lib/*.sh)
+#   3. Initialize telemetry + progress log + clean git state
+#   4. Loop: for each iteration until plan complete or max reached:
+#      a. Check operator commands (pause/resume/skip/note)
+#      b. Get next pending task (respects depends_on)
+#      c. [handoff-plus-index only] Check compaction triggers
+#      d. Create git checkpoint
+#      e. Run coding cycle (prompt -> CLI -> parse -> save)
+#      f. Run validation gate
+#      g. Commit or rollback based on validation result
+#      h. Apply plan amendments from handoff
+#      i. Rate-limit delay
+#
+# MODE-SENSITIVE BRANCHING:
+#   - Step 1 (compaction check): only runs in handoff-plus-index mode
+#   - build_coding_prompt_v2() internally varies sections 3-6 by mode
+#   - All other steps are mode-agnostic
 main() {
     parse_args "$@"
+    # Save CLI mode before load_config potentially sets RALPH_MODE
     local cli_mode="$MODE"
     load_config
-    # Priority: CLI --mode > RALPH_MODE from config > default
+    # INVARIANT: CLI --mode > RALPH_MODE from config > default "handoff-only"
     if [[ -n "$cli_mode" ]]; then
         MODE="$cli_mode"
     elif [[ -n "${RALPH_MODE:-}" ]]; then
@@ -428,7 +624,6 @@ main() {
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"
     log "info" "Plan: $PLAN_FILE ($remaining tasks remaining)"
 
-    # Read current state
     local current_iteration
     current_iteration="$(read_state "current_iteration")"
 
@@ -441,13 +636,15 @@ main() {
         write_state "started_at" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     fi
 
-    # Always persist current mode to state
+    # Persist mode to state so dashboard and resume can read it
     write_state "mode" "$MODE"
 
-    # Source library modules (after config, before loop)
+    # Source modules AFTER config so they pick up config globals at source time
     source_libs
 
-    # Initialize telemetry control file and emit start event
+    # --- Initialize subsystems ---
+    # All guarded with declare -f so startup doesn't fail if a module is missing.
+    # This enables partial-module testing and graceful degradation.
     if declare -f init_control_file >/dev/null 2>&1; then
         init_control_file
     fi
@@ -460,7 +657,8 @@ main() {
             '{mode: $mode, dry_run: $dry_run, resume: $resume}')"
     fi
 
-    # Ensure clean git state before starting
+    # INVARIANT: Git working tree must be clean before first checkpoint.
+    # Without this, the first rollback would discard pre-existing uncommitted work.
     if [[ "$DRY_RUN" == "false" ]]; then
         ensure_clean_state
     fi
@@ -468,27 +666,28 @@ main() {
     log "info" "Starting main loop (max_iterations=$MAX_ITERATIONS)"
 
     while (( current_iteration < MAX_ITERATIONS )); do
-        # Check for shutdown signal
+        # Cooperative shutdown: check flag set by signal handler
         if [[ "$SHUTTING_DOWN" == "true" ]]; then
             break
         fi
 
-        # Process operator control commands (pause/resume/inject-note)
+        # Process operator commands BEFORE task selection so pause/skip
+        # take effect before the next iteration starts
         if declare -f check_and_handle_commands >/dev/null 2>&1; then
             check_and_handle_commands
         fi
 
-        # Check if plan is complete
         if is_plan_complete "$PLAN_FILE"; then
             log "info" "All tasks complete. Exiting."
             write_state "status" "complete"
             break
         fi
 
-        # Get next pending task
         local task_json
         task_json="$(get_next_task "$PLAN_FILE")"
 
+        # Empty/null task_json means all pending tasks have unmet dependencies.
+        # This is distinct from "plan complete" (all done/skipped).
         if [[ -z "$task_json" || "$task_json" == "{}" || "$task_json" == "null" ]]; then
             log "info" "No pending tasks found (possible blocked dependencies). Exiting."
             write_state "status" "blocked"
@@ -507,7 +706,6 @@ main() {
         log "info" "Iteration $current_iteration: $task_id — $task_title"
         log "info" "=========================================="
 
-        # Emit iteration start event
         if declare -f emit_event >/dev/null 2>&1; then
             emit_event "iteration_start" "Starting iteration $current_iteration" \
                 "$(jq -cn --arg task_id "$task_id" --arg title "$task_title" --argjson iter "$current_iteration" \
@@ -515,10 +713,12 @@ main() {
         fi
 
         # === DRY RUN MODE ===
+        # Exercises the full pipeline with mock CLI responses to validate
+        # orchestrator logic without spending API credits.
         if [[ "$DRY_RUN" == "true" ]]; then
             log "info" "[DRY RUN] Processing task $task_id (mode=$MODE)"
 
-            # Still run compaction check in dry-run to test triggers (handoff-plus-index only)
+            # MODE BRANCH: Test compaction triggers even in dry-run (handoff-plus-index only)
             if [[ "$MODE" == "handoff-plus-index" ]]; then
                 if check_compaction_trigger "$STATE_FILE" "$task_json" 2>/dev/null; then
                     log "info" "[DRY RUN] Knowledge indexing would be triggered"
@@ -526,7 +726,6 @@ main() {
                 fi
             fi
 
-            # Run coding cycle in dry-run (CLI returns mock response)
             set_task_status "$PLAN_FILE" "$task_id" "in_progress"
             local handoff_file
             handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")" || true
@@ -541,10 +740,15 @@ main() {
 
         # === REAL MODE ===
 
-        # Step 1: Check if knowledge indexing is due (handoff-plus-index mode only)
+        # Step 1: Knowledge indexing check (handoff-plus-index mode only)
+        # MODE BRANCH: In handoff-only mode this entire block is skipped.
+        # The trigger evaluation (compaction.sh) checks 4 conditions in priority
+        # order: task metadata > novelty > bytes > periodic.
         if [[ "$MODE" == "handoff-plus-index" ]]; then
             if check_compaction_trigger "$STATE_FILE" "$task_json"; then
                 log "info" "Knowledge indexing triggered"
+                # Non-fatal: indexing failure should not block the coding iteration.
+                # The coding prompt can still work without updated index.
                 run_knowledge_indexer "$task_json" || {
                     log "warn" "Knowledge indexing failed, continuing"
                 }
@@ -554,12 +758,14 @@ main() {
         # Step 2: Mark task as in-progress
         set_task_status "$PLAN_FILE" "$task_id" "in_progress"
 
-        # Step 3: Create git checkpoint
+        # Step 3: Create git checkpoint (SHA for potential rollback)
+        # INVARIANT: Every coding cycle is bracketed by checkpoint/commit-or-rollback.
+        # This guarantees no half-applied changes persist between iterations.
         local checkpoint
         checkpoint="$(create_checkpoint)"
         log "info" "Checkpoint: ${checkpoint:0:8}"
 
-        # Step 4: Run the coding cycle (prompt → CLI → parse → save)
+        # Step 4: Run the coding cycle (prompt -> CLI -> parse -> save)
         local handoff_file=""
         if ! handoff_file="$(run_coding_cycle "$task_json" "$current_iteration")"; then
             log "error" "Coding cycle failed for $task_id"
@@ -567,6 +773,7 @@ main() {
             set_task_status "$PLAN_FILE" "$task_id" "pending"
             increment_retry_count "$PLAN_FILE" "$task_id"
 
+            # Check if task has exhausted its retry budget
             local retry_count max_retries
             retry_count="$(echo "$task_json" | jq -r '.retry_count // 0')"
             max_retries="$(echo "$task_json" | jq -r '.max_retries // 2')"
@@ -584,6 +791,8 @@ main() {
         fi
 
         # Step 5: Run validation gate
+        # Validation strategy (strict/lenient/tests_only) is set in ralph.conf.
+        # Results written to .ralph/logs/validation/iter-N.json for failure context.
         if run_validation "$current_iteration"; then
             log "info" "Validation PASSED for iteration $current_iteration"
             if declare -f emit_event >/dev/null 2>&1; then
@@ -593,6 +802,9 @@ main() {
             fi
 
             # Step 6a: Commit successful iteration
+            # INVARIANT: Commit happens BEFORE task status change, so a crash
+            # between commit and status update results in a committed but
+            # still-in-progress task (recoverable on resume).
             commit_iteration "$current_iteration" "$task_id" "passed validation"
             set_task_status "$PLAN_FILE" "$task_id" "done"
 
@@ -604,6 +816,9 @@ main() {
             fi
 
             # Step 7: Apply plan amendments from handoff (if any)
+            # The coding agent can propose adding, modifying, or removing tasks
+            # based on what it discovers during implementation. Safety guardrails
+            # in plan-ops.sh limit to 3 amendments and protect "done" tasks.
             if [[ -n "$handoff_file" && -f "$handoff_file" ]]; then
                 apply_amendments "$PLAN_FILE" "$handoff_file" "$task_id" || {
                     log "warn" "Amendment application had issues, continuing"
@@ -624,10 +839,11 @@ main() {
                     '{iteration: $iter, task_id: $task_id}')"
             fi
 
-            # Step 6b: Rollback on validation failure
+            # Step 6b (failure path): Rollback to checkpoint
+            # INVARIANT: After rollback, working tree matches pre-iteration state.
+            # .ralph/ is excluded from git clean so handoffs and state survive.
             rollback_to_checkpoint "$checkpoint"
 
-            # Increment retry count
             increment_retry_count "$PLAN_FILE" "$task_id"
 
             local retry_count max_retries
@@ -642,7 +858,10 @@ main() {
                 set_task_status "$PLAN_FILE" "$task_id" "pending"
             fi
 
-            # Save failure context for the retry iteration's prompt
+            # Save failure context for the retry iteration's prompt.
+            # This creates a feedback loop: validation output -> failure-context.md
+            # -> consumed by run_coding_cycle() on next attempt -> injected into
+            # ## Failure Context section -> LLM sees what went wrong and fixes it.
             local validation_file=".ralph/logs/validation/iter-${current_iteration}.json"
             if [[ -f "$validation_file" ]]; then
                 local failure_ctx
@@ -662,7 +881,8 @@ main() {
 
         log "info" "=== End iteration $current_iteration ==="
 
-        # Rate limit protection: delay between iterations
+        # Rate limit protection: configurable delay prevents hitting API rate limits
+        # when iterations complete quickly (e.g., small tasks or dry-run-like passes).
         local delay="${RALPH_MIN_DELAY_SECONDS:-30}"
         if [[ "$delay" -gt 0 ]]; then
             log "debug" "Waiting ${delay}s before next iteration (rate limit protection)"
@@ -675,7 +895,6 @@ main() {
         write_state "status" "max_iterations_reached"
     fi
 
-    # Emit orchestrator end event
     if declare -f emit_event >/dev/null 2>&1; then
         local final_status
         final_status="$(read_state "status" 2>/dev/null || echo "unknown")"
@@ -687,7 +906,9 @@ main() {
     log "info" "Ralph Deluxe finished ($(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?") tasks remaining)"
 }
 
-# Run main unless being sourced (for testing)
+# Run main unless being sourced (for testing).
+# This guard allows bats tests to `source ralph.sh` and call individual
+# functions without triggering the main loop.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

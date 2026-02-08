@@ -1,9 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# telemetry.sh — Append-only event stream and operator control for Ralph Deluxe
-# Emits structured JSONL events to .ralph/logs/events.jsonl and processes
-# operator commands (pause, resume, inject-note) from .ralph/control/commands.json.
+# telemetry.sh — Event stream and operator control plane
+#
+# PURPOSE: Two responsibilities:
+# 1. Append-only JSONL event stream for observability (events.jsonl)
+# 2. Operator control command queue for pause/resume/skip/inject (commands.json)
+#
+# The dashboard (dashboard.html) polls events.jsonl for display and POSTs to
+# serve.py to enqueue commands. This module reads and executes those commands.
+#
+# DEPENDENCIES:
+#   Called by: ralph.sh main loop (emit_event at iteration boundaries,
+#             check_and_handle_commands at loop top)
+#   Depends on: jq, log() from ralph.sh
+#   Optionally calls: set_task_status() from plan-ops.sh (for skip-task)
+#   Globals read/write: RALPH_PAUSED (controls pause/resume blocking)
+#   Files written: .ralph/logs/events.jsonl (append), .ralph/control/commands.json (read+clear)
+#
+# CONTROL FLOW:
+#   Dashboard POST → serve.py enqueue_command() → commands.json pending[]
+#   ralph.sh main loop → check_and_handle_commands() → process_control_commands()
+#     → reads pending[], executes each, clears pending[]
+#     → if paused: wait_while_paused() blocks until resume command arrives
+#
+# EVENT TYPES: orchestrator_start, orchestrator_end, iteration_start, iteration_end,
+#   validation_pass, validation_fail, pause, resume, note, skip_task
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
@@ -15,10 +37,9 @@ RALPH_EVENTS_FILE="${RALPH_EVENTS_FILE:-.ralph/logs/events.jsonl}"
 RALPH_CONTROL_FILE="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
 RALPH_PAUSE_POLL_SECONDS="${RALPH_PAUSE_POLL_SECONDS:-5}"
 
-# emit_event — Append a single event to the JSONL stream
-# Args: $1 = event_type (string), $2 = message (string), $3 = metadata JSON (optional)
-# Writes one JSON line to RALPH_EVENTS_FILE
-# Returns: 0 on success, 1 on failure
+# Append a single event to the JSONL stream.
+# Args: $1 = event_type, $2 = message, $3 = metadata JSON (optional, default "{}")
+# SIDE EFFECT: Appends one line to RALPH_EVENTS_FILE. Creates parent dir if needed.
 emit_event() {
     local event_type="$1"
     local message="$2"
@@ -44,9 +65,9 @@ emit_event() {
     log "debug" "Emitted event: $event_type — $message"
 }
 
-# init_control_file — Create the control commands file if it doesn't exist
-# Ensures .ralph/control/commands.json exists with an empty pending array.
-# Returns: 0
+# Create the control commands file if it doesn't exist.
+# Must be called once at orchestrator startup before the main loop.
+# SIDE EFFECT: Creates .ralph/control/commands.json with empty pending array.
 init_control_file() {
     local control_file="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
     mkdir -p "$(dirname "$control_file")"
@@ -56,9 +77,8 @@ init_control_file() {
     fi
 }
 
-# read_pending_commands — Read the pending commands array from the control file
+# Read the pending commands array from the control file.
 # Stdout: JSON array of pending commands (or empty array if file missing)
-# Returns: 0
 read_pending_commands() {
     local control_file="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
     if [[ -f "$control_file" ]]; then
@@ -68,8 +88,8 @@ read_pending_commands() {
     fi
 }
 
-# clear_pending_commands — Reset the pending array in the control file
-# Returns: 0
+# Reset the pending array in the control file after processing.
+# Uses temp-file-then-rename pattern for atomicity with concurrent serve.py writes.
 clear_pending_commands() {
     local control_file="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
     if [[ -f "$control_file" ]]; then
@@ -79,11 +99,10 @@ clear_pending_commands() {
     fi
 }
 
-# process_control_commands — Read, execute, and clear pending commands
-# Processes: pause, resume, inject-note, skip-task
-# Sets RALPH_PAUSED=true on pause, RALPH_PAUSED=false on resume
-# skip-task sets the task status to "skipped" via set_task_status() if available
-# Returns: 0
+# Read, execute, and clear all pending commands.
+# Command types: pause, resume, inject-note, skip-task
+# SIDE EFFECT: Sets RALPH_PAUSED=true/false. May call set_task_status() for skip.
+# INVARIANT: After return, pending[] is empty regardless of command outcomes.
 process_control_commands() {
     local commands
     commands="$(read_pending_commands)"
@@ -122,6 +141,7 @@ process_control_commands() {
             skip-task)
                 local skip_task_id
                 skip_task_id="$(echo "$cmd_obj" | jq -r '.task_id // "unknown"')"
+                # Depends on plan-ops.sh being sourced; gracefully degrades if not
                 if declare -f set_task_status >/dev/null 2>&1; then
                     local plan_file="${RALPH_PLAN_FILE:-plan.json}"
                     set_task_status "$plan_file" "$skip_task_id" "skipped"
@@ -145,10 +165,9 @@ process_control_commands() {
     clear_pending_commands
 }
 
-# wait_while_paused — Block execution while RALPH_PAUSED is true
-# Polls the control file for a resume command every RALPH_PAUSE_POLL_SECONDS.
-# Emits a "waiting" event periodically while paused.
-# Returns: 0 when resumed
+# Block execution while RALPH_PAUSED is true.
+# Polls control file every RALPH_PAUSE_POLL_SECONDS for a resume command.
+# CALLER: check_and_handle_commands() when RALPH_PAUSED is true.
 wait_while_paused() {
     local poll_interval="${RALPH_PAUSE_POLL_SECONDS:-5}"
 
@@ -161,9 +180,9 @@ wait_while_paused() {
     done
 }
 
-# check_and_handle_commands — Convenience wrapper: process commands, then pause if needed
-# Call this at the top of each iteration to handle any pending operator commands.
-# Returns: 0 when ready to continue
+# Convenience wrapper: process pending commands, then block if paused.
+# Called at the top of each main loop iteration to handle operator input.
+# CALLER: ralph.sh main loop, guarded by `declare -f` check.
 check_and_handle_commands() {
     process_control_commands
     if [[ "${RALPH_PAUSED:-false}" == "true" ]]; then
