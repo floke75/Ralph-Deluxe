@@ -1,19 +1,27 @@
 /**
  * take-screenshots.mjs — Captures dashboard screenshots with mock data.
  *
- * Starts a local HTTP server, copies mock data into position,
- * intercepts the Tailwind CDN with a locally-built CSS file,
- * uses Playwright to navigate and capture screenshots, then cleans up.
+ * Starts serve.py, copies mock data into position, intercepts the Tailwind
+ * CDN with a locally-built CSS file, captures 6 views, then cleans up.
  *
- * Usage: PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright node screenshots/take-screenshots.mjs
+ * Intended to be invoked by capture.sh, which handles environment detection
+ * and sets the env vars below. Can also be run directly if you set them yourself.
+ *
+ * Environment variables (set by capture.sh):
+ *   PLAYWRIGHT_MODULE   — absolute path to playwright index.mjs
+ *   CHROMIUM_BIN        — absolute path to chromium executable
+ *   SCREENSHOT_PORT     — HTTP server port (default: 8089)
+ *
  * Output: screenshots/*.png
- *
- * Prerequisites:
- *   npm install --save-dev tailwindcss@3
- *   npx tailwindcss -i <input.css> -o screenshots/tailwind-generated.css --minify
  */
 
-import { chromium } from "/opt/node22/lib/node_modules/playwright/index.mjs";
+const playwrightPath = process.env.PLAYWRIGHT_MODULE;
+if (!playwrightPath) {
+  console.error("PLAYWRIGHT_MODULE env var not set. Run via capture.sh or set it manually.");
+  process.exit(1);
+}
+const { chromium } = await import(playwrightPath);
+
 import {
   readFileSync, mkdirSync, copyFileSync,
   existsSync, rmSync, renameSync
@@ -28,24 +36,29 @@ const MOCK_DIR = resolve(__dirname, "mock-data");
 const OUT_DIR = resolve(__dirname);
 const RALPH_DIR = resolve(PROJECT_ROOT, ".ralph");
 
-const PORT = 8089;
+const CHROMIUM_BIN = process.env.CHROMIUM_BIN || null;
+const PORT = parseInt(process.env.SCREENSHOT_PORT || "8089", 10);
 const TAILWIND_CSS = readFileSync(resolve(__dirname, "tailwind-generated.css"), "utf-8");
 
-// Files to place and their mock source / destination
+// ---- Mock data management ------------------------------------------------
+
+// Discover handoff files dynamically from mock-data/ directory
 const MOCK_FILES = [
   { src: "state.json", dest: resolve(RALPH_DIR, "state.json"), backup: true },
   { src: "plan.json", dest: resolve(PROJECT_ROOT, "plan.json"), backup: true },
-  { src: "knowledge-index.json", dest: resolve(RALPH_DIR, "knowledge-index.json"), backup: false },
-  { src: "progress-log.json", dest: resolve(RALPH_DIR, "progress-log.json"), backup: false },
-  { src: "events.jsonl", dest: resolve(RALPH_DIR, "logs", "events.jsonl"), backup: false },
+  { src: "knowledge-index.json", dest: resolve(RALPH_DIR, "knowledge-index.json"), backup: true },
+  { src: "progress-log.json", dest: resolve(RALPH_DIR, "progress-log.json"), backup: true },
+  { src: "events.jsonl", dest: resolve(RALPH_DIR, "logs", "events.jsonl"), backup: true },
 ];
 
-for (let i = 1; i <= 12; i++) {
+for (let i = 1; i <= 99; i++) {
   const num = String(i).padStart(3, "0");
+  const srcPath = resolve(MOCK_DIR, `handoff-${num}.json`);
+  if (!existsSync(srcPath)) break;
   MOCK_FILES.push({
     src: `handoff-${num}.json`,
     dest: resolve(RALPH_DIR, "handoffs", `handoff-${num}.json`),
-    backup: false,
+    backup: true,
   });
 }
 
@@ -60,11 +73,11 @@ function installMockData() {
     const srcPath = resolve(MOCK_DIR, f.src);
     if (!existsSync(srcPath)) continue;
 
-    if (f.backup && existsSync(f.dest)) {
+    if (existsSync(f.dest)) {
       const bak = f.dest + ".screenshot-bak";
       renameSync(f.dest, bak);
       backups.push({ original: f.dest, backup: bak });
-    } else if (!existsSync(f.dest)) {
+    } else {
       created.push(f.dest);
     }
 
@@ -73,27 +86,22 @@ function installMockData() {
 }
 
 function cleanupMockData() {
+  // Remove files we created (didn't exist before)
   for (const f of created) {
     if (existsSync(f)) rmSync(f);
   }
-  for (let i = 1; i <= 12; i++) {
-    const num = String(i).padStart(3, "0");
-    const p = resolve(RALPH_DIR, "handoffs", `handoff-${num}.json`);
-    if (existsSync(p)) rmSync(p);
-  }
-  for (const name of ["knowledge-index.json", "progress-log.json"]) {
-    const p = resolve(RALPH_DIR, name);
-    if (existsSync(p)) rmSync(p);
-  }
-  const eventsPath = resolve(RALPH_DIR, "logs", "events.jsonl");
-  if (existsSync(eventsPath)) rmSync(eventsPath);
 
+  // Restore all backups
   for (const b of backups) {
     if (existsSync(b.backup)) {
+      // Remove the mock copy first (it replaced the original)
+      if (existsSync(b.original)) rmSync(b.original);
       renameSync(b.backup, b.original);
     }
   }
 }
+
+// ---- Server ---------------------------------------------------------------
 
 function startServer() {
   return new Promise((resolveP, reject) => {
@@ -115,11 +123,13 @@ function startServer() {
   });
 }
 
+// ---- Screenshot capture ---------------------------------------------------
+
 async function capturePage(context, name, actions) {
-  console.log(`Capturing: ${name}`);
+  console.log(`  ${name}`);
   const page = await context.newPage();
 
-  // Intercept Tailwind CDN script → inject local CSS instead
+  // Intercept Tailwind CDN → inject locally-built CSS
   await page.route("**cdn.tailwindcss.com**", (route) => {
     route.fulfill({
       contentType: "application/javascript",
@@ -144,6 +154,8 @@ async function capturePage(context, name, actions) {
   await page.close();
 }
 
+// ---- Main -----------------------------------------------------------------
+
 async function main() {
   console.log("Installing mock data...");
   installMockData();
@@ -153,17 +165,21 @@ async function main() {
     console.log("Starting server on port", PORT, "...");
     serverProc = await startServer();
 
-    const browser = await chromium.launch({
-      executablePath: "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome",
+    const launchOptions = {
       args: [
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-gpu", "--disable-dev-shm-usage", "--single-process",
       ],
-    });
+    };
+    if (CHROMIUM_BIN) launchOptions.executablePath = CHROMIUM_BIN;
+
+    const browser = await chromium.launch(launchOptions);
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       deviceScaleFactor: 2,
     });
+
+    console.log("Capturing screenshots...");
 
     // 1. Main dashboard (handoff-plus-index mode, running)
     await capturePage(context, "01-dashboard-main.png");
@@ -222,7 +238,7 @@ async function main() {
     });
 
     await browser.close();
-    console.log("\nDone! Screenshots saved to screenshots/ directory.");
+    console.log("Done! Screenshots saved to screenshots/ directory.");
   } finally {
     if (serverProc) serverProc.kill("SIGTERM");
     console.log("Cleaning up mock data...");

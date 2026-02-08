@@ -1,5 +1,5 @@
 module.exports = {
-  content: [".ralph/dashboard.html"],
+  content: ["../.ralph/dashboard.html"],
   theme: { extend: {} },
   plugins: [],
 }

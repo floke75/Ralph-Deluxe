@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "screenshots": "bash screenshots/capture.sh"
+  },
   "devDependencies": {
     "tailwindcss": "^3.4.19"
   }
