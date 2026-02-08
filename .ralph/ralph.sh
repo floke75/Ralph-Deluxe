@@ -46,7 +46,7 @@ DRY_RUN=false
 RESUME=false
 LOG_LEVEL="${RALPH_LOG_LEVEL:-info}"
 LOG_FILE="${RALPH_LOG_FILE:-.ralph/logs/ralph.log}"
-MODE=""  # handoff-only | handoff-plus-index (set by CLI, config, or default)
+MODE=""  # handoff-only | handoff-plus-index | agent-orchestrated (set by CLI, config, or default)
 
 ###############################################################################
 # Logging
@@ -103,7 +103,7 @@ Options:
   --max-iterations N   Maximum iterations to run (default: $MAX_ITERATIONS)
   --plan FILE          Path to plan.json (default: $PLAN_FILE)
   --config FILE        Path to ralph.conf (default: $CONFIG_FILE)
-  --mode MODE          Operating mode: handoff-only (default) or handoff-plus-index
+  --mode MODE          Operating mode: handoff-only (default), handoff-plus-index, or agent-orchestrated
   --dry-run            Print what would happen without executing
   --resume             Resume from saved state
   -h, --help           Show this help message
@@ -669,12 +669,17 @@ trap shutdown_handler SIGINT SIGTERM
 #      f. Run validation gate
 #      g. Commit or rollback based on validation result
 #      h. Apply plan amendments from handoff
-#      i. Rate-limit delay
+#      i. [agent-orchestrated only] Context post + agent passes
+#      j. Rate-limit delay
 #
 # MODE-SENSITIVE BRANCHING:
-#   - Step 1 (compaction check): only runs in handoff-plus-index mode
-#   - build_coding_prompt_v2() internally varies sections 3-6 by mode
-#   - All other steps are mode-agnostic
+#   - Step c (compaction): handoff-plus-index only
+#   - Step e (coding cycle): agent-orchestrated uses run_agent_coding_cycle()
+#     (context agent → coding agent); other modes use run_coding_cycle()
+#     (bash prompt assembly → coding agent)
+#   - Step i (post-iteration): agent-orchestrated runs context post (knowledge
+#     organization) and optional agent passes (code review, etc.)
+#   - build_coding_prompt_v2() internally varies sections 3-6 by mode (non-agent modes)
 main() {
     parse_args "$@"
     # Save CLI mode before load_config potentially sets RALPH_MODE

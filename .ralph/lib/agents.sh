@@ -12,11 +12,11 @@ set -euo pipefail
 #
 # DEPENDENCIES:
 #   Called by: ralph.sh main loop (agent-orchestrated mode only)
-#   Calls: cli-ops.sh (run_agent_iteration), compaction.sh (verification),
-#          context.sh (get_budget_for_mode, estimate_tokens — fallback only)
+#   Calls: compaction.sh (snapshot/verify/restore_knowledge_indexes, update_compaction_state),
+#          telemetry.sh (emit_event — guarded with declare -f)
 #   Globals read: RALPH_DIR, STATE_FILE, PROJECT_ROOT, DRY_RUN,
 #                 RALPH_SKIP_PERMISSIONS, RALPH_CONTEXT_AGENT_MODEL,
-#                 RALPH_AGENT_PASS_ENABLED
+#                 RALPH_AGENT_PASSES_ENABLED
 #   Globals written: none
 #   Files read: .ralph/config/agents.json, .ralph/config/context-prep-schema.json,
 #               .ralph/config/context-post-schema.json, .ralph/config/mcp-context.json,

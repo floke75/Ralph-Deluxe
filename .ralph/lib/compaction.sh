@@ -29,6 +29,8 @@ set -euo pipefail
 # MODULE DEPENDENCIES:
 #   Called by:
 #     - ralph.sh main loop (check_compaction_trigger, run_knowledge_indexer)
+#     - agents.sh run_context_post() (snapshot/verify/restore_knowledge_indexes,
+#       update_compaction_state — agent-orchestrated mode)
 #     - context.sh (extract_l1)
 #   Calls into:
 #     - cli-ops.sh: run_memory_iteration() for CLI indexer invocation

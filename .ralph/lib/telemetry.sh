@@ -44,7 +44,9 @@ set -euo pipefail
 #     → if paused: wait_while_paused() blocks until resume command arrives
 #
 # EVENT TYPES: orchestrator_start, orchestrator_end, iteration_start, iteration_end,
-#   validation_pass, validation_fail, pause, resume, note, skip_task
+#   validation_pass, validation_fail, pause, resume, note, skip_task,
+#   stuck_detected, failure_pattern, human_review_requested, agent_pass
+#   (last four emitted by agents.sh in agent-orchestrated mode)
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
