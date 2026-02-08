@@ -25,6 +25,7 @@ common_setup() {
     export RALPH_COMPACTION_THRESHOLD_BYTES=32000
     export RALPH_COMPACTION_INTERVAL=5
     export RALPH_CONTEXT_BUDGET_TOKENS=8000
+    export RALPH_CONTEXT_BUDGET_TOKENS_HPI=16000
     export RALPH_LOG_LEVEL="error"
     export RALPH_LOG_FILE=".ralph/logs/ralph.log"
 }

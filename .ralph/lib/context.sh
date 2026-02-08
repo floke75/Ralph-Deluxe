@@ -42,10 +42,10 @@ set -euo pipefail
 #
 # PARSER-SENSITIVE CONSTRAINTS:
 # - Do not rename any of these v2 headers without updating truncation/retrieval logic
-#   that matches them literally via awk: 
+#   that matches them literally via awk:
 #   "## Current Task", "## Failure Context", "## Retrieved Memory",
 #   "## Previous Handoff", "## Retrieved Project Memory",
-#   "## Accumulated Knowledge", "## Skills", "## Output Instructions".
+#   "## Skills", "## Output Instructions".
 # - These literals are consumed by truncation parsing; changing them silently degrades
 #   budget enforcement behavior.
 #
@@ -59,9 +59,10 @@ set -euo pipefail
 #                .ralph/templates/coding-prompt-footer.md (preferred output instructions),
 #                .ralph/templates/coding-prompt.md (fallback output instructions),
 #                .ralph/skills/*.md (per-task skill files)
-#   Globals read: RALPH_CONTEXT_BUDGET_TOKENS (default 8000)
+#   Globals read: RALPH_CONTEXT_BUDGET_TOKENS (default 8000),
+#                 RALPH_CONTEXT_BUDGET_TOKENS_HPI (default 16000)
 #
-# THE 8-SECTION PROMPT (build_coding_prompt_v2):
+# THE 7-SECTION PROMPT (build_coding_prompt_v2):
 #   Assembled in this exact order. Section headers are "## Name" — truncation
 #   relies on these being exact matches. Do not rename without updating awk parser.
 #
@@ -69,25 +70,39 @@ set -euo pipefail
 #   2. ## Failure Context      — retry iterations only, from validation output
 #   3. ## Retrieved Memory     — constraints + decisions from latest handoff
 #   4. ## Previous Handoff     — freeform narrative (± L2 in h+i mode)
-#   5. ## Retrieved Project Memory — h+i mode only, keyword-matched from index
-#   6. ## Accumulated Knowledge — h+i mode only, pointer to knowledge-index.md
-#   7. ## Skills               — task-specific skill files from .ralph/skills/
-#   8. ## Output Instructions  — from template or inline fallback
+#   5. ## Retrieved Project Memory — h+i mode only, full knowledge index inlined
+#   6. ## Skills               — task-specific skill files from .ralph/skills/
+#   7. ## Output Instructions  — from template or inline fallback
 #
 # TRUNCATION PRIORITY (lowest number = removed/trimmed first):
-#   1. Accumulated Knowledge (removed entirely)
-#   2. Skills (removed entirely)
-#   3. Output Instructions (removed entirely)
-#   4. Previous Handoff (removed entirely)
-#   5. Retrieved Project Memory (removed entirely)
-#   6. Retrieved Memory (removed entirely)
-#   7. Failure Context (removed entirely)
-#   8. Current Task (last resort — hard truncate)
+#   1. Skills (removed entirely)
+#   2. Output Instructions (removed entirely)
+#   3. Previous Handoff (removed entirely)
+#   4. Retrieved Project Memory (removed entirely)
+#   5. Retrieved Memory (removed entirely)
+#   6. Failure Context (removed entirely)
+#   7. Current Task (last resort — hard truncate)
 
 # Source config if not already loaded
 if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS:-}" ]]; then
     RALPH_CONTEXT_BUDGET_TOKENS=8000
 fi
+if [[ -z "${RALPH_CONTEXT_BUDGET_TOKENS_HPI:-}" ]]; then
+    RALPH_CONTEXT_BUDGET_TOKENS_HPI=16000
+fi
+
+# Return the appropriate token budget for the given mode.
+# handoff-plus-index gets a larger budget because it inlines the full knowledge index.
+# Args: $1 = mode ("handoff-only" or "handoff-plus-index")
+# Stdout: token budget integer
+get_budget_for_mode() {
+    local mode="${1:-handoff-only}"
+    if [[ "$mode" == "handoff-plus-index" ]]; then
+        echo "${RALPH_CONTEXT_BUDGET_TOKENS_HPI}"
+    else
+        echo "${RALPH_CONTEXT_BUDGET_TOKENS}"
+    fi
+}
 
 # log() stub for standalone testing — ralph.sh provides the real one
 if ! declare -f log >/dev/null 2>&1; then
@@ -141,8 +156,8 @@ estimate_tokens() {
 #
 # HOW IT WORKS:
 # 1. If content fits budget, pass through unchanged.
-# 2. Split content into 8 named sections using awk on "## " headers.
-# 3. Trim sections in priority order (Accumulated Knowledge first, Current Task last).
+# 2. Split content into 7 named sections using awk on "## " headers.
+# 3. Trim sections in priority order (Skills first, Current Task last).
 # 4. Rebuild prompt from sections after each trim, re-check size.
 # 5. Emit [[TRUNCATION_METADATA]] JSON to stderr (consumed by tests, not by Claude).
 #
@@ -169,10 +184,10 @@ truncate_to_budget() {
 
     # Section-aware truncation for v2 prompts.
     if [[ "$content" == *"## Current Task"* && "$content" == *"## Output Instructions"* ]]; then
-        local current_task failure_context retrieved_memory previous_handoff retrieved_project_memory accumulated_knowledge skills output_instructions
+        local current_task failure_context retrieved_memory previous_handoff retrieved_project_memory skills output_instructions
 
         # Single awk pass splits content into named sections.
-        # Section boundaries are ^## headers matching the exact 8 section names.
+        # Section boundaries are ^## headers matching the exact 7 section names.
         local _sections
         _sections="$(echo "$content" | awk '
             BEGIN { current="" }
@@ -181,7 +196,6 @@ truncate_to_budget() {
             /^## Retrieved Memory$/       { current="RETRIEVED_MEMORY"; next }
             /^## Previous Handoff$/       { current="PREVIOUS_HANDOFF"; next }
             /^## Retrieved Project Memory$/ { current="RETRIEVED_PROJECT_MEMORY"; next }
-            /^## Accumulated Knowledge$/  { current="ACCUMULATED_KNOWLEDGE"; next }
             /^## Skills$/                 { current="SKILLS"; next }
             /^## Output Instructions$/    { current="OUTPUT_INSTRUCTIONS"; next }
             current != "" { print current "\t" $0 }
@@ -197,7 +211,6 @@ truncate_to_budget() {
         retrieved_memory="$(_extract_section "RETRIEVED_MEMORY")"
         previous_handoff="$(_extract_section "PREVIOUS_HANDOFF")"
         retrieved_project_memory="$(_extract_section "RETRIEVED_PROJECT_MEMORY")"
-        accumulated_knowledge="$(_extract_section "ACCUMULATED_KNOWLEDGE")"
         skills="$(_extract_section "SKILLS")"
         output_instructions="$(_extract_section "OUTPUT_INSTRUCTIONS")"
 
@@ -222,9 +235,6 @@ truncate_to_budget() {
             if [[ -n "$retrieved_project_memory" ]]; then
                 r+=$'\n\n'"## Retrieved Project Memory"$'\n'"${retrieved_project_memory}"
             fi
-            if [[ -n "$accumulated_knowledge" ]]; then
-                r+=$'\n\n'"## Accumulated Knowledge"$'\n'"${accumulated_knowledge}"
-            fi
             r+=$'\n\n'"## Skills"$'\n'"${skills}"
             r+=$'\n\n'"## Output Instructions"$'\n'"${output_instructions}"
             echo "$r"
@@ -238,10 +248,7 @@ truncate_to_budget() {
         while [[ ${#rebuilt} -gt $max_chars ]]; do
             over=$(( ${#rebuilt} - max_chars ))
 
-            if [[ -n "$accumulated_knowledge" ]]; then
-                accumulated_knowledge=""
-                [[ " ${truncated_sections[*]} " == *" Accumulated Knowledge "* ]] || truncated_sections+=("Accumulated Knowledge")
-            elif [[ -n "$skills" ]]; then
+            if [[ -n "$skills" ]]; then
                 skills=""
                 [[ " ${truncated_sections[*]} " == *" Skills "* ]] || truncated_sections+=("Skills")
             elif [[ -n "$output_instructions" ]]; then
@@ -558,17 +565,17 @@ retrieve_relevant_knowledge() {
     ' "$index_file" | sort -t $'\t' -k1,1n -k2,2n | cut -f3- | head -n "$max_lines"
 }
 
-# build_coding_prompt_v2 — Mode-aware prompt assembly (8 sections)
+# build_coding_prompt_v2 — Mode-aware prompt assembly (7 sections)
 #
 # This is the primary prompt builder. It assembles all context the coding LLM
-# needs for an iteration, organized into 8 named sections that the truncation
+# needs for an iteration, organized into 7 named sections that the truncation
 # engine can independently trim.
 #
 # CRITICAL INVARIANTS:
 # - Section headers must be exactly "## Name" (awk parser in truncate_to_budget matches these)
 # - Section order must match truncation priority expectations
 # - $mode must be passed as a variable, not hardcoded (tests verify this)
-# - In handoff-only mode, sections 5 and 6 are omitted (no knowledge index)
+# - In handoff-only mode, section 5 is omitted (no knowledge index)
 #
 # Args: $1 = task JSON, $2 = mode, $3 = skills content, $4 = failure context,
 #       $5 = first iteration context (optional, injected into Previous Handoff when
@@ -616,10 +623,8 @@ ${constraints:-No constraints recorded.}
 
 ### Decisions
 ${decisions:-No decisions recorded.}"
-        # In h+i mode, also point to the knowledge index
-        if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
-            retrieved_memory_section+=$'\n\n### Knowledge Index\n- .ralph/knowledge-index.md'
-        fi
+        # In h+i mode, the full knowledge index is inlined in ## Retrieved Project Memory,
+        # so no pointer needed here.
     fi
 
     # Previous Handoff: mode-sensitive (freeform only vs freeform + L2)
@@ -636,22 +641,20 @@ ${narrative}"
 ${first_iteration_context}"
     fi
 
-    # Retrieved Project Memory: keyword-matched entries (handoff-plus-index only)
+    # Retrieved Project Memory: full knowledge index inlined (handoff-plus-index only)
+    # WHY full inline instead of keyword matching: the index is typically 20-40 lines
+    # (~1500-2500 tokens). With the HPI budget (16000 tokens), inlining guarantees all
+    # hard constraints are present (no keyword miss) and eliminates the fragile awk
+    # keyword matcher. Truncation handles the growth case — if the index gets too large,
+    # this section is removed entirely and the agent can still Read the file.
     local retrieved_project_memory_section=""
     if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
-        local retrieved_project_memory
-        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" "${base_dir}/knowledge-index.md" 12)"
-        if [[ -n "$retrieved_project_memory" ]]; then
+        local index_content
+        index_content="$(cat "${base_dir}/knowledge-index.md" 2>/dev/null)" || true
+        if [[ -n "$index_content" ]]; then
             retrieved_project_memory_section="## Retrieved Project Memory
-${retrieved_project_memory}"
+${index_content}"
         fi
-    fi
-
-    # Accumulated Knowledge: static pointer (handoff-plus-index only, lowest truncation priority)
-    local accumulated_knowledge_section=""
-    if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
-        accumulated_knowledge_section="## Accumulated Knowledge
-A knowledge index of learnings from all previous iterations is available at .ralph/knowledge-index.md. Consult it if you need project history beyond what's in the handoff above."
     fi
 
     local skills_section="## Skills
@@ -695,16 +698,13 @@ iteration will actually understand what happened."
     local output_section="## Output Instructions
 ${output_instructions}"
 
-    # Assemble sections in canonical order
+    # Assemble sections in canonical order (7 sections)
     prompt+="$task_section"$'\n\n'
     prompt+="$failure_section"$'\n\n'
     prompt+="$retrieved_memory_section"$'\n\n'
     prompt+="$previous_handoff_section"$'\n\n'
     if [[ -n "$retrieved_project_memory_section" ]]; then
         prompt+="$retrieved_project_memory_section"$'\n\n'
-    fi
-    if [[ -n "$accumulated_knowledge_section" ]]; then
-        prompt+="$accumulated_knowledge_section"$'\n\n'
     fi
     prompt+="$skills_section"$'\n\n'
     prompt+="$output_section"

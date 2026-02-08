@@ -420,8 +420,11 @@ run_coding_cycle() {
     fi
 
     # Section-aware truncation: trims lowest-priority sections first to fit
-    # within RALPH_CONTEXT_BUDGET_TOKENS. See context.sh for priority order.
-    prompt="$(truncate_to_budget "$prompt")"
+    # within mode-appropriate budget. handoff-plus-index gets a larger budget
+    # (RALPH_CONTEXT_BUDGET_TOKENS_HPI) because it inlines the full knowledge index.
+    local budget
+    budget="$(get_budget_for_mode "$MODE")"
+    prompt="$(truncate_to_budget "$prompt" "$budget")"
 
     log "info" "Prompt assembled ($(estimate_tokens "$prompt") estimated tokens)"
 

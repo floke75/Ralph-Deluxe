@@ -145,7 +145,8 @@ All settings live in `.ralph/config/ralph.conf`. Key settings:
 | `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | Number of recent handoffs used for novelty comparison |
 | `RALPH_DEFAULT_MAX_TURNS` | 20 | Default max turns per coding iteration |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | Minimum delay between iterations (rate limit protection) |
-| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | Token budget for assembled context prompts |
+| `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | Token budget for assembled context prompts (handoff-only mode) |
+| `RALPH_CONTEXT_BUDGET_TOKENS_HPI` | 16000 | Token budget for handoff-plus-index mode (larger to fit full knowledge index) |
 | `RALPH_COMMIT_PREFIX` | ralph | Prefix for git commit messages |
 | `RALPH_LOG_LEVEL` | info | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `RALPH_VALIDATION_COMMANDS` | (array) | Shell commands to run for validation |
