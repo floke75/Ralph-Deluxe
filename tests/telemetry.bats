@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/telemetry.bats — Tests for .ralph/lib/telemetry.sh
+# Scope: unit tests for telemetry event emission and control-file pause handling.
+# Fixture notes: telemetry paths are redirected into TEST_DIR and poll timing is set
+# to zero to keep pause/resume checks deterministic and fast.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 

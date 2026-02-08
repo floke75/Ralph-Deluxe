@@ -1,5 +1,9 @@
 #!/usr/bin/env bats
-# Tests for .ralph/lib/git-ops.sh
+
+# Scope: unit tests for checkpoint and rollback helpers in git-ops.sh.
+# Fixture notes: each test initializes an isolated git repo with signing disabled
+# and uses a no-op log() stub expected by the module.
+
 
 # Provide a stub log() function since git-ops.sh uses it
 log() {

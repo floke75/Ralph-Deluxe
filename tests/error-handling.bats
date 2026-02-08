@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/error-handling.bats — Error recovery tests for Ralph Deluxe
+# Scope: integration-style tests for ralph.sh error recovery and resilience paths.
+# Fixture notes: tests run from a copied .ralph runtime with mocked binaries in
+# TEST_DIR/bin and permissive validation config to isolate failure handling logic.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# tests/compaction.bats — Tests for .ralph/lib/compaction.sh
+# Scope: unit tests for compaction triggers, history, and knowledge-index generation.
+# Fixture notes: setup mirrors a minimal .ralph tree in TEST_DIR with fixture state,
+# handoffs, and template files required by compaction.sh helpers.
+
 
 PROJ_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 

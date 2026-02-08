@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# tests/test_helper/common.sh — Shared test helpers for Ralph Deluxe bats tests
+
+# Scope: shared helper functions used across Ralph Deluxe bats suites.
+# Fixture notes: common_setup/common_teardown manage TEST_DIR lifecycle and export
+# default env vars expected by library modules under test.
+
 
 PROJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 

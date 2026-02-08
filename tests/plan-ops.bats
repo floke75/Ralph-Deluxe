@@ -1,5 +1,9 @@
 #!/usr/bin/env bats
-# Tests for .ralph/lib/plan-ops.sh
+
+# Scope: unit tests for task selection and plan mutation behavior in plan-ops.sh.
+# Fixture notes: plan fixtures are written inline; RALPH_DIR and log() are stubbed
+# before sourcing to satisfy module globals in a temp TEST_DIR workspace.
+
 
 # Stub log() and RALPH_DIR since plan-ops.sh uses them
 log() { :; }
