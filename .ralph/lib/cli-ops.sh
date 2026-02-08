@@ -3,10 +3,22 @@ set -euo pipefail
 
 # cli-ops.sh — Claude Code CLI invocation and response parsing
 #
-# PURPOSE: Isolates all direct interaction with the `claude` CLI binary. Two
-# invocation modes: coding iterations (handoff schema + coding MCP) and memory
-# iterations (memory schema + memory MCP). Handles response envelope parsing
-# and handoff file persistence.
+# MODULE RESPONSIBILITY BOUNDARIES
+#   1) Invocation: Builds CLI args and executes `claude` in coding and memory
+#      modes (including schema file selection, MCP config selection, and
+#      environment-controlled options such as skip-permissions and dry-run).
+#   2) Response capture: Returns the raw outer JSON envelope emitted by `claude`
+#      so callers can persist/log full metadata if needed.
+#   3) Parsing + handoff extraction: Performs the required double-parse for
+#      `.result` (outer envelope JSON -> inner handoff JSON string) and
+#      validates inner JSON before returning it.
+#
+# ERROR-HANDLING CONTRACT TO CALLERS
+#   - On success, functions write machine-readable JSON to stdout.
+#   - On operational failure (CLI invocation failure, malformed/empty output,
+#     invalid inner JSON), functions log an error and return non-zero.
+#   - Functions avoid partial fallback data on hard failures so callers can
+#     safely retry without guessing whether output is complete.
 #
 # DEPENDENCIES:
 #   Called by: ralph.sh run_coding_cycle(), run_compaction_cycle()
@@ -33,7 +45,13 @@ if ! declare -f log >/dev/null 2>&1; then
 fi
 
 # Invoke claude for a coding iteration with task-specific config.
-# The prompt is piped to stdin; skills are injected via --append-system-prompt-file.
+# Command construction/environment usage:
+#   - Reads `.max_turns` from task JSON (default 20) and maps to --max-turns.
+#   - Loads handoff schema + coding MCP config from .ralph/config.
+#   - Honors env vars: RALPH_SKIP_PERMISSIONS, DRY_RUN.
+#   - Optionally appends an extra system prompt file for task-scoped skills.
+# The prompt is piped to stdin; skills are injected via
+# --append-system-prompt-file.
 # Args: $1 = prompt, $2 = task JSON (for max_turns), $3 = skills file path (optional)
 # Stdout: raw JSON response envelope from claude CLI
 # Returns: 0 on success, 1 on CLI failure
@@ -71,6 +89,8 @@ run_coding_iteration() {
     fi
 
     response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>/dev/null) || {
+        # Retry-safe failure reporting: emits only deterministic log + exit code,
+        # and does not create/emit partial handoff payloads.
         log "error" "Claude CLI invocation failed with exit code $?"
         return 1
     }
@@ -79,6 +99,10 @@ run_coding_iteration() {
 }
 
 # Invoke claude for a memory/indexer iteration with memory-specific config.
+# Command construction/environment usage:
+#   - Loads memory output schema + memory MCP config from .ralph/config.
+#   - Uses RALPH_COMPACTION_MAX_TURNS (default 10) for --max-turns.
+#   - Honors env vars: RALPH_SKIP_PERMISSIONS, DRY_RUN.
 # Used by legacy compaction (run_compaction_cycle) and knowledge indexer.
 # Args: $1 = prompt
 # Stdout: raw JSON response envelope from claude CLI
@@ -110,6 +134,8 @@ run_memory_iteration() {
     fi
 
     response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>/dev/null) || {
+        # Retry-safe failure reporting: logs and exits without writing partial
+        # index/handoff data from this helper.
         log "error" "Memory agent CLI invocation failed with exit code $?"
         return 1
     }
@@ -118,7 +144,15 @@ run_memory_iteration() {
 }
 
 # Extract the structured handoff from Claude's response envelope.
-# The envelope has .result as a JSON STRING requiring a second parse step.
+# JSON/handoff extraction behavior:
+#   - Assumes outer response is a JSON object with `.result` key.
+#   - Requires `.result` to be a non-empty JSON-encoded string payload.
+#   - Validates the inner payload with jq before returning it to callers.
+# Required structural assumptions from model output:
+#   - Outer envelope keys are expected to include metadata fields like
+#     `cost_usd`, `duration_ms`, `num_turns`, `is_error`, plus `result`.
+#   - `result` must contain an object matching the selected schema
+#     (handoff-schema.json or memory-output-schema.json as configured by caller).
 # Args: $1 = raw JSON response string
 # Stdout: parsed handoff JSON object
 # Returns: 0 on success, 1 if .result is missing/empty/invalid JSON
