@@ -35,24 +35,74 @@ truncate_to_budget() {
 
     # Section-aware truncation for v2 prompts.
     if [[ "$content" == *"## Current Task"* && "$content" == *"## Output Instructions"* ]]; then
-        local current_task failure_context retrieved_memory previous_handoff skills output_instructions
-        current_task="$(echo "$content" | awk 'BEGIN{capture=0} /^## Current Task$/{capture=1} /^## Failure Context$/{capture=0} capture{print}')"
-        failure_context="$(echo "$content" | awk 'BEGIN{capture=0} /^## Failure Context$/{capture=1} /^## Retrieved Memory$/{capture=0} capture{print}')"
-        retrieved_memory="$(echo "$content" | awk 'BEGIN{capture=0} /^## Retrieved Memory$/{capture=1} /^## Previous Handoff$/{capture=0} capture{print}')"
-        previous_handoff="$(echo "$content" | awk 'BEGIN{capture=0} /^## Previous Handoff$/{capture=1} /^## Skills$/{capture=0} capture{print}')"
-        skills="$(echo "$content" | awk 'BEGIN{capture=0} /^## Skills$/{capture=1} /^## Output Instructions$/{capture=0} capture{print}')"
-        output_instructions="$(echo "$content" | awk 'BEGIN{capture=0} /^## Output Instructions$/{capture=1} capture{print}')"
+        local current_task failure_context retrieved_memory previous_handoff retrieved_project_memory accumulated_knowledge skills output_instructions
+
+        # Use a single awk pass to split content into named sections.
+        # Sections are delimited by ^## headers. The order in the prompt is:
+        #   Current Task, Failure Context, Retrieved Memory, Previous Handoff,
+        #   Retrieved Project Memory (optional), Accumulated Knowledge (optional),
+        #   Skills, Output Instructions
+        local _sections
+        _sections="$(echo "$content" | awk '
+            BEGIN { current="" }
+            /^## Current Task$/           { current="CURRENT_TASK"; next }
+            /^## Failure Context$/        { current="FAILURE_CONTEXT"; next }
+            /^## Retrieved Memory$/       { current="RETRIEVED_MEMORY"; next }
+            /^## Previous Handoff$/       { current="PREVIOUS_HANDOFF"; next }
+            /^## Retrieved Project Memory$/ { current="RETRIEVED_PROJECT_MEMORY"; next }
+            /^## Accumulated Knowledge$/  { current="ACCUMULATED_KNOWLEDGE"; next }
+            /^## Skills$/                 { current="SKILLS"; next }
+            /^## Output Instructions$/    { current="OUTPUT_INSTRUCTIONS"; next }
+            current != "" { print current "\t" $0 }
+        ')"
+
+        _extract_section() {
+            local tag="$1"
+            echo "$_sections" | awk -F'\t' -v t="$tag" '$1 == t { sub(/^[^\t]*\t/, ""); print }'
+        }
+
+        current_task="$(_extract_section "CURRENT_TASK")"
+        failure_context="$(_extract_section "FAILURE_CONTEXT")"
+        retrieved_memory="$(_extract_section "RETRIEVED_MEMORY")"
+        previous_handoff="$(_extract_section "PREVIOUS_HANDOFF")"
+        retrieved_project_memory="$(_extract_section "RETRIEVED_PROJECT_MEMORY")"
+        accumulated_knowledge="$(_extract_section "ACCUMULATED_KNOWLEDGE")"
+        skills="$(_extract_section "SKILLS")"
+        output_instructions="$(_extract_section "OUTPUT_INSTRUCTIONS")"
 
         local truncated_sections=()
         local rebuilt over trim_by
 
-        rebuilt="${current_task}"$'\n\n'"${failure_context}"$'\n\n'"${retrieved_memory}"$'\n\n'"${previous_handoff}"$'\n\n'"${skills}"$'\n\n'"${output_instructions}"
+        _rebuild_prompt() {
+            local r=""
+            r+="## Current Task"$'\n'"${current_task}"
+            r+=$'\n\n'"## Failure Context"$'\n'"${failure_context}"
+            r+=$'\n\n'"## Retrieved Memory"$'\n'"${retrieved_memory}"
+            r+=$'\n\n'"## Previous Handoff"$'\n'"${previous_handoff}"
+            if [[ -n "$retrieved_project_memory" ]]; then
+                r+=$'\n\n'"## Retrieved Project Memory"$'\n'"${retrieved_project_memory}"
+            fi
+            if [[ -n "$accumulated_knowledge" ]]; then
+                r+=$'\n\n'"## Accumulated Knowledge"$'\n'"${accumulated_knowledge}"
+            fi
+            r+=$'\n\n'"## Skills"$'\n'"${skills}"
+            r+=$'\n\n'"## Output Instructions"$'\n'"${output_instructions}"
+            echo "$r"
+        }
 
-        # Lowest to highest priority: skills, output instructions, narrative/history, constraints/decisions, failure.
+        rebuilt="$(_rebuild_prompt)"
+
+        # Truncation priority (lowest → highest):
+        #   Accumulated Knowledge (just a pointer) → Skills → Output Instructions →
+        #   Previous Handoff → Retrieved Project Memory → Retrieved Memory →
+        #   Failure Context → Current Task (last resort)
         while [[ ${#rebuilt} -gt $max_chars ]]; do
             over=$(( ${#rebuilt} - max_chars ))
 
-            if [[ -n "$skills" && ${#skills} -gt 10 ]]; then
+            if [[ -n "$accumulated_knowledge" && ${#accumulated_knowledge} -gt 2 ]]; then
+                accumulated_knowledge=""
+                [[ " ${truncated_sections[*]} " == *" Accumulated Knowledge "* ]] || truncated_sections+=("Accumulated Knowledge")
+            elif [[ -n "$skills" && ${#skills} -gt 10 ]]; then
                 trim_by=$(( over < ${#skills} - 10 ? over : ${#skills} - 10 ))
                 skills="${skills:0:$(( ${#skills} - trim_by ))}"
                 [[ " ${truncated_sections[*]} " == *" Skills "* ]] || truncated_sections+=("Skills")
@@ -64,6 +114,10 @@ truncate_to_budget() {
                 trim_by=$(( over < ${#previous_handoff} - 18 ? over : ${#previous_handoff} - 18 ))
                 previous_handoff="${previous_handoff:0:$(( ${#previous_handoff} - trim_by ))}"
                 [[ " ${truncated_sections[*]} " == *" Previous Handoff "* ]] || truncated_sections+=("Previous Handoff")
+            elif [[ -n "$retrieved_project_memory" && ${#retrieved_project_memory} -gt 2 ]]; then
+                trim_by=$(( over < ${#retrieved_project_memory} - 2 ? over : ${#retrieved_project_memory} - 2 ))
+                retrieved_project_memory="${retrieved_project_memory:0:$(( ${#retrieved_project_memory} - trim_by ))}"
+                [[ " ${truncated_sections[*]} " == *" Retrieved Project Memory "* ]] || truncated_sections+=("Retrieved Project Memory")
             elif [[ -n "$retrieved_memory" && ${#retrieved_memory} -gt 17 ]]; then
                 trim_by=$(( over < ${#retrieved_memory} - 17 ? over : ${#retrieved_memory} - 17 ))
                 retrieved_memory="${retrieved_memory:0:$(( ${#retrieved_memory} - trim_by ))}"
@@ -79,7 +133,7 @@ truncate_to_budget() {
                 break
             fi
 
-            rebuilt="${current_task}"$'\n\n'"${failure_context}"$'\n\n'"${retrieved_memory}"$'\n\n'"${previous_handoff}"$'\n\n'"${skills}"$'\n\n'"${output_instructions}"
+            rebuilt="$(_rebuild_prompt)"
         done
 
         local trunc_json
@@ -356,7 +410,7 @@ ${decisions:-No decisions recorded.}"
     fi
 
     local narrative
-    narrative="$(get_prev_handoff_for_mode "$handoffs_dir" "handoff-only")"
+    narrative="$(get_prev_handoff_for_mode "$handoffs_dir" "$mode")"
     local previous_handoff_section="## Previous Handoff
 This is the first iteration. No previous handoff available."
     if [[ -n "$narrative" ]]; then

@@ -349,9 +349,27 @@ verify_hard_constraints_preserved() {
     local constraint
     while IFS= read -r constraint; do
         [[ -z "$constraint" ]] && continue
-        if ! grep -Fqx -- "$constraint" "$knowledge_index_md" && ! grep -Fq -- "Superseded: ${constraint}" "$knowledge_index_md"; then
-            return 1
+        # Check 1: exact line still present
+        if grep -Fqx -- "$constraint" "$knowledge_index_md"; then
+            continue
         fi
+        # Check 2: memory-ID-based supersession — extract [K-...] ID from old
+        # constraint and look for [supersedes: <that-id>] in the new index.
+        local memory_id=""
+        if [[ "$constraint" =~ \[K-[a-zA-Z0-9_-]+\] ]]; then
+            memory_id="${BASH_REMATCH[0]}"
+            # Strip surrounding brackets for the supersedes search
+            local bare_id="${memory_id:1:${#memory_id}-2}"
+            if grep -Fq "[supersedes: ${bare_id}]" "$knowledge_index_md"; then
+                continue
+            fi
+        fi
+        # Check 3: legacy format — "Superseded: <full line>"
+        if grep -Fq -- "Superseded: ${constraint}" "$knowledge_index_md"; then
+            continue
+        fi
+        log "warn" "Hard constraint dropped without supersession: ${constraint}"
+        return 1
     done <<< "$previous_constraints"
 }
 

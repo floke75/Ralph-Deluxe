@@ -602,6 +602,67 @@ EOF
     [[ "$(jq length "$RALPH_DIR/knowledge-index.json")" -eq 1 ]]
 }
 
+@test "verify_hard_constraints_preserved accepts supersession via memory ID" {
+    local backup_md
+    backup_md="$(mktemp)"
+    # Backup has a hard constraint with a memory ID
+    {
+        echo "1"
+        cat <<'EOF'
+# Knowledge Index
+Last updated: iteration 5 (2026-02-06T08:00:00Z)
+
+## Constraints
+- [K-constraint-no-force-push] Developers MUST NOT use git push --force on main [source: iter 3]
+EOF
+    } > "$backup_md"
+
+    # New index supersedes the constraint via memory-ID-based supersession
+    local new_md
+    new_md="$(mktemp)"
+    cat > "$new_md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 7 (2026-02-07T08:00:00Z)
+
+## Constraints
+- [K-constraint-no-force-push-v2] Protected branches MUST NOT receive force pushes [source: iter 7] [supersedes: K-constraint-no-force-push]
+EOF
+
+    run verify_hard_constraints_preserved "$new_md" "$backup_md"
+    [[ "$status" -eq 0 ]]
+    rm -f "$backup_md" "$new_md"
+}
+
+@test "verify_hard_constraints_preserved rejects dropped hard constraint without supersession" {
+    local backup_md
+    backup_md="$(mktemp)"
+    {
+        echo "1"
+        cat <<'EOF'
+# Knowledge Index
+Last updated: iteration 5 (2026-02-06T08:00:00Z)
+
+## Constraints
+- [K-constraint-no-force-push] Developers MUST NOT use git push --force on main [source: iter 3]
+EOF
+    } > "$backup_md"
+
+    # New index is missing the constraint entirely — no supersession note
+    local new_md
+    new_md="$(mktemp)"
+    cat > "$new_md" <<'EOF'
+# Knowledge Index
+Last updated: iteration 7 (2026-02-07T08:00:00Z)
+
+## Constraints
+- [K-constraint-timeout] Processes MUST exit within 60s [source: iter 7]
+EOF
+
+    run verify_hard_constraints_preserved "$new_md" "$backup_md"
+    [[ "$status" -eq 1 ]]
+    rm -f "$backup_md" "$new_md"
+}
+
 @test "run_knowledge_indexer rejects deletion of prior json iterations" {
     run_memory_iteration() {
         cat > "$RALPH_DIR/knowledge-index.md" <<'EOF'
