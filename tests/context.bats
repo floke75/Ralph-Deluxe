@@ -908,3 +908,55 @@ EOF
     # Should match "jq" from title/description (now >= 2 chars)
     [[ "$output" == *"jq output must stay JSON-safe"* ]]
 }
+
+@test "get_prev_handoff_for_mode handles malformed handoff JSON without failing" {
+    cat > "$TEST_DIR/handoffs/handoff-999.json" <<'BADJSON'
+{ not-valid-json
+BADJSON
+
+    run get_prev_handoff_for_mode "$TEST_DIR/handoffs" "handoff-only"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"Structured context from previous iteration"* ]]
+    [[ "$output" != *"git operations module"* ]]
+}
+
+@test "build_coding_prompt_v2 tolerates malformed latest handoff in Retrieved Memory" {
+    mkdir -p "$TEST_DIR/.ralph/handoffs" "$TEST_DIR/.ralph/templates"
+    cat > "$TEST_DIR/.ralph/handoffs/handoff-901.json" <<'BADJSON'
+{ definitely:broken
+BADJSON
+    cat > "$TEST_DIR/.ralph/templates/coding-prompt-footer.md" <<'TPL'
+Footer content
+TPL
+
+    local task_json
+    task_json=$(cat "$TEST_DIR/fixtures/sample-task.json")
+
+    local old_pwd
+    old_pwd=$(pwd)
+    cd "$TEST_DIR"
+    run build_coding_prompt_v2 "$task_json" "handoff-only" "" ""
+    cd "$old_pwd"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Retrieved Memory"* ]]
+    [[ "$output" == *"No constraints recorded."* ]]
+    [[ "$output" == *"No decisions recorded."* ]]
+}
+
+@test "truncate_to_budget parser fallback keeps original leading content when section parse fails" {
+    local malformed
+    malformed=$(cat <<'BADPROMPT'
+## Current Task 
+ID: TASK-1
+
+## Output Instructions
+output output output output output output output output output output
+BADPROMPT
+)
+
+    run truncate_to_budget "$malformed" 8
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"## Current Task "* ]]
+    [[ "$output" == *"\"parser-fallback\""* ]]
+}
