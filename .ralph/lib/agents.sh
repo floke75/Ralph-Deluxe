@@ -239,6 +239,43 @@ build_context_prep_input() {
         manifest+="- First iteration template: ${base_dir}/templates/first-iteration.md"$'\n'
     fi
 
+    # Research requests from previous coding agent
+    # WHY: The coding agent can signal request_research in its handoff — topics it
+    # needs the context agent to investigate. We extract these from the latest handoff
+    # and include them in the manifest so the context agent knows to act on them.
+    if [[ -n "$handoff_files" ]]; then
+        local latest_handoff
+        latest_handoff="$(echo "$handoff_files" | tail -1)"
+        local research_requests
+        research_requests="$(jq -r '(.request_research // []) | .[]' "$latest_handoff" 2>/dev/null)"
+        if [[ -n "$research_requests" ]]; then
+            manifest+=$'\n'"## Research Requests (from coding agent)"$'\n'
+            manifest+="The coding agent explicitly requested research on these topics. You MUST investigate each one and include your findings in the coding prompt:"$'\n'
+            while IFS= read -r topic; do
+                [[ -n "$topic" ]] && manifest+="- ${topic}"$'\n'
+            done <<< "$research_requests"
+        fi
+
+        # Also surface human review requests so context agent is aware
+        local human_review_needed
+        human_review_needed="$(jq -r '.request_human_review.needed // false' "$latest_handoff" 2>/dev/null)"
+        if [[ "$human_review_needed" == "true" ]]; then
+            local review_reason
+            review_reason="$(jq -r '.request_human_review.reason // "no reason given"' "$latest_handoff" 2>/dev/null)"
+            manifest+=$'\n'"## Human Review Signal"$'\n'
+            manifest+="The coding agent requested human review: ${review_reason}"$'\n'
+            manifest+="Consider whether to recommend request_human_review as your directive."$'\n'
+        fi
+
+        # Surface confidence level for context agent awareness
+        local confidence
+        confidence="$(jq -r '.confidence_level // empty' "$latest_handoff" 2>/dev/null)"
+        if [[ -n "$confidence" && "$confidence" != "null" && "$confidence" != "high" ]]; then
+            manifest+=$'\n'"## Coding Agent Confidence"$'\n'
+            manifest+="The coding agent reported **${confidence}** confidence in its last output. Consider providing more detailed guidance or research in the prompt."$'\n'
+        fi
+    fi
+
     manifest+=$'\n'"## State"$'\n'
     manifest+="- Current iteration: ${current_iteration}"$'\n'
     manifest+="- Mode: ${mode}"$'\n'

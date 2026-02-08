@@ -117,7 +117,9 @@ Two-agent architecture: a **context agent** prepares pristine context for a **co
 3. **Context post** (post-coding): Processes handoff into knowledge index. Detects failure patterns across iterations. Recommends next action.
 4. **Optional passes**: Configurable agents (e.g., code review with cheaper model) run based on trigger conditions.
 
-**Context agent I/O**: Receives a lightweight manifest with file pointers (not full content). Uses built-in Read tools to access what it needs. Writes `prepared-prompt.md` as side effect. Returns directives via JSON schema.
+**Context agent I/O**: Receives a lightweight manifest with file pointers (not full content), plus research requests and signals from the previous coding agent. Uses built-in Read tools and MCP tools (Context7 for library docs) to research everything the coding agent will need. Writes `prepared-prompt.md` as side effect. Returns directives via JSON schema. The coding agent has NO MCP tools — everything it needs must be in the prepared prompt.
+
+**Research loop**: When a task involves libraries (`needs_docs: true` or `libraries[]`), the context agent uses Context7 to fetch API documentation and includes relevant excerpts in the coding prompt. When the coding agent signals `request_research`, those topics are forwarded to the context agent's next prep pass for investigation. This ensures the coding agent never has to hunt for information.
 
 **Stuck detection**: Context agent analyzes retry counts, failure patterns, and consecutive handoff narratives. Can recommend skipping a task, requesting human review, or modifying the plan.
 

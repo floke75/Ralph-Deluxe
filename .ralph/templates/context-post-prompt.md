@@ -94,15 +94,18 @@ After updating the knowledge index, analyze recent iteration history:
 
 ## Coding Agent Signal Processing
 
-The coding agent may embed signals in its handoff:
+The coding agent may embed signals in its handoff. These are critical for the context→coding agent feedback loop:
 
+- **`request_research`** (string[]): Topics the coding agent needs researched. **These will be forwarded to the context prep agent on the next iteration.** Note them in the knowledge index if they represent recurring information gaps.
+- **`request_human_review`** ({needed, reason}): The coding agent believes human judgment is needed. If `needed: true`, strongly consider recommending `request_human_review` as your directive.
+- **`confidence_level`** (high/medium/low): The coding agent's self-assessed confidence. Low confidence + failed validation is a strong stuck signal. Low confidence + passed validation means the knowledge index should note potential fragility.
 - **`unfinished_business` with high priority**: Something critical was left incomplete
 - **`bugs_encountered` with `resolved: false`**: Unresolved bugs suggest difficulty
 - **`recommendations`**: The coding agent's suggestions for next steps
 - **`plan_amendments`**: Already processed by orchestrator, but review for patterns
 - **`freeform` narrative**: May contain explicit requests for help or research
 
-Assess these signals and translate them into your `coding_agent_signals` output.
+Assess these signals and translate them into your `coding_agent_signals` output. Research requests and human review signals are particularly important — they represent the coding agent's explicit feedback to the context agent about what it needs to do its job better.
 
 ## Structured Output
 

@@ -217,6 +217,76 @@ teardown() {
     [[ "$output" == *"prepared-prompt.md"* ]]
 }
 
+@test "build_context_prep_input forwards research requests from previous handoff" {
+    cat > "$TEST_DIR/.ralph/handoffs/handoff-001.json" <<'EOF'
+{
+    "task_completed": {"task_id": "TASK-001", "summary": "done", "fully_complete": true},
+    "deviations": [], "bugs_encountered": [], "architectural_notes": [],
+    "unfinished_business": [], "recommendations": [],
+    "files_touched": [], "plan_amendments": [], "tests_added": [],
+    "constraints_discovered": [],
+    "request_research": ["bats-core assertion syntax", "jq recursive descent"],
+    "summary": "done",
+    "freeform": "Need more info on bats assertions and jq patterns."
+}
+EOF
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test"}'
+    local output
+    output="$(build_context_prep_input "$task_json" 2 "agent-orchestrated")"
+    [[ "$output" == *"Research Requests"* ]]
+    [[ "$output" == *"bats-core assertion syntax"* ]]
+    [[ "$output" == *"jq recursive descent"* ]]
+    [[ "$output" == *"MUST investigate"* ]]
+}
+
+@test "build_context_prep_input forwards human review signal from previous handoff" {
+    cat > "$TEST_DIR/.ralph/handoffs/handoff-001.json" <<'EOF'
+{
+    "task_completed": {"task_id": "TASK-001", "summary": "done", "fully_complete": true},
+    "deviations": [], "bugs_encountered": [], "architectural_notes": [],
+    "unfinished_business": [], "recommendations": [],
+    "files_touched": [], "plan_amendments": [], "tests_added": [],
+    "constraints_discovered": [],
+    "request_human_review": {"needed": true, "reason": "Security-sensitive change"},
+    "summary": "done",
+    "freeform": "This needs human review."
+}
+EOF
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test"}'
+    local output
+    output="$(build_context_prep_input "$task_json" 2 "agent-orchestrated")"
+    [[ "$output" == *"Human Review Signal"* ]]
+    [[ "$output" == *"Security-sensitive change"* ]]
+}
+
+@test "build_context_prep_input forwards low confidence signal from previous handoff" {
+    cat > "$TEST_DIR/.ralph/handoffs/handoff-001.json" <<'EOF'
+{
+    "task_completed": {"task_id": "TASK-001", "summary": "done", "fully_complete": true},
+    "deviations": [], "bugs_encountered": [], "architectural_notes": [],
+    "unfinished_business": [], "recommendations": [],
+    "files_touched": [], "plan_amendments": [], "tests_added": [],
+    "constraints_discovered": [],
+    "confidence_level": "low",
+    "summary": "done",
+    "freeform": "Not confident about the approach."
+}
+EOF
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test"}'
+    local output
+    output="$(build_context_prep_input "$task_json" 2 "agent-orchestrated")"
+    [[ "$output" == *"Coding Agent Confidence"* ]]
+    [[ "$output" == *"low"* ]]
+}
+
+@test "build_context_prep_input does NOT include research section when no requests" {
+    create_sample_handoff "$TEST_DIR/.ralph/handoffs/handoff-001.json" "TASK-001"
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test"}'
+    local output
+    output="$(build_context_prep_input "$task_json" 2 "agent-orchestrated")"
+    [[ "$output" != *"Research Requests"* ]]
+}
+
 # ===== build_context_post_input tests =====
 
 @test "build_context_post_input includes iteration and task details" {
