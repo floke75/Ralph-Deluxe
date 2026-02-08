@@ -1,0 +1,151 @@
+{
+  "plan_summary": {
+    "total_tasks": 12,
+    "completed": 7,
+    "failed": 0,
+    "pending": 4,
+    "skipped": 0,
+    "in_progress": 1
+  },
+  "entries": [
+    {
+      "task_id": "TASK-001",
+      "title": "Create directory structure and config files",
+      "iteration": 1,
+      "summary": "Created all directories and config files per spec. JSON configs validate clean.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/config/ralph.conf", "action": "created" },
+        { "path": ".ralph/config/handoff-schema.json", "action": "created" },
+        { "path": ".ralph/config/mcp-coding.json", "action": "created" },
+        { "path": ".ralph/config/mcp-memory.json", "action": "created" }
+      ],
+      "tests_added": [],
+      "design_decisions": ["Used flat config structure over nested YAML"],
+      "constraints": [],
+      "deviations": [],
+      "bugs": []
+    },
+    {
+      "task_id": "TASK-002",
+      "title": "Core orchestrator loop skeleton",
+      "iteration": 2,
+      "summary": "Main loop skeleton with argument parsing, signal handling, and stub functions.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/ralph.sh", "action": "created" }
+      ],
+      "tests_added": [],
+      "design_decisions": ["State machine approach for main loop", "Trap-based signal handling for graceful shutdown"],
+      "constraints": [],
+      "deviations": [],
+      "bugs": []
+    },
+    {
+      "task_id": "TASK-003",
+      "title": "Git operations module",
+      "iteration": 3,
+      "summary": "Checkpoint/rollback/commit using rev-parse HEAD. git clean --exclude=.ralph/ for safety.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/lib/git-ops.sh", "action": "created" },
+        { "path": "tests/git-ops.bats", "action": "created" },
+        { "path": ".gitignore", "action": "modified" }
+      ],
+      "tests_added": [
+        { "file": "tests/git-ops.bats", "test_names": ["create_checkpoint captures HEAD", "rollback restores state", "rollback removes untracked"] }
+      ],
+      "design_decisions": ["rev-parse HEAD over tags for simplicity"],
+      "constraints": [
+        { "constraint": "git clean removes .gitignore-matched files", "impact": "Must exclude .ralph/ from clean" }
+      ],
+      "deviations": [
+        { "planned": "Use git tags for checkpoints", "actual": "Used rev-parse HEAD", "reason": "Avoids tag namespace pollution" }
+      ],
+      "bugs": [
+        { "description": "git clean removed .ralph/state.json", "resolution": "Added --exclude=.ralph/", "resolved": true }
+      ]
+    },
+    {
+      "task_id": "TASK-004",
+      "title": "Plan operations module",
+      "iteration": 5,
+      "summary": "Task retrieval with jq select, amendment guardrails (max 3, no done removal).",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/lib/plan-ops.sh", "action": "created" },
+        { "path": "tests/plan-ops.bats", "action": "created" }
+      ],
+      "tests_added": [
+        { "file": "tests/plan-ops.bats", "test_names": ["get_next_task returns first pending", "set_task_status updates correctly", "apply_amendments respects guardrails"] }
+      ],
+      "design_decisions": ["jq select for ID lookup instead of array index"],
+      "constraints": [],
+      "deviations": [
+        { "planned": "Simple array index for task lookup", "actual": "jq select filter", "reason": "Robust against plan reordering" }
+      ],
+      "bugs": [
+        { "description": "jq amendment insertion failed on empty arrays", "resolution": "Added // [] fallback", "resolved": true }
+      ]
+    },
+    {
+      "task_id": "TASK-005",
+      "title": "Context assembly module",
+      "iteration": 7,
+      "summary": "8-section prompt assembly with priority-based truncation. Token estimation within 15%.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/lib/context.sh", "action": "created" },
+        { "path": "tests/context.bats", "action": "created" },
+        { "path": ".ralph/templates/coding-prompt.md", "action": "created" }
+      ],
+      "tests_added": [
+        { "file": "tests/context.bats", "test_names": ["8-section parsing", "truncation priority order", "mode-sensitive handoff retrieval"] }
+      ],
+      "design_decisions": ["awk-based section parser for ## headers", "Truncation removes lowest-priority sections first"],
+      "constraints": [
+        { "constraint": "Section headers must be exactly '## Name'", "impact": "Truncation parser depends on exact format" }
+      ],
+      "deviations": [],
+      "bugs": []
+    },
+    {
+      "task_id": "TASK-006",
+      "title": "Validation gate module",
+      "iteration": 9,
+      "summary": "Three strategies implemented. Failure context truncated to 500 chars per check.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/lib/validation.sh", "action": "created" },
+        { "path": "tests/validation.bats", "action": "created" }
+      ],
+      "tests_added": [
+        { "file": "tests/validation.bats", "test_names": ["strict fails on any error", "lenient allows lint fail", "tests_only ignores lint"] }
+      ],
+      "design_decisions": ["Unknown commands classified as 'test' for fail-safe behavior"],
+      "constraints": [],
+      "deviations": [],
+      "bugs": []
+    },
+    {
+      "task_id": "TASK-007",
+      "title": "Compaction trigger and strategy module",
+      "iteration": 11,
+      "summary": "Four trigger conditions, post-indexer verification, memory ID format enforcement.",
+      "fully_complete": true,
+      "files_changed": [
+        { "path": ".ralph/lib/compaction.sh", "action": "created" },
+        { "path": "tests/compaction.bats", "action": "created" }
+      ],
+      "tests_added": [
+        { "file": "tests/compaction.bats", "test_names": ["task metadata trigger", "novelty threshold trigger", "byte threshold trigger", "periodic trigger", "constraint supersession"] }
+      ],
+      "design_decisions": ["First-match-wins for trigger evaluation", "Supersession via inline [supersedes: K-...] markers"],
+      "constraints": [
+        { "constraint": "Memory IDs must match K-<type>-<slug> format", "impact": "Verification rejects malformed IDs" }
+      ],
+      "deviations": [],
+      "bugs": []
+    }
+  ]
+}

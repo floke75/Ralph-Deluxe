@@ -1,0 +1,56 @@
+[
+  {
+    "iteration": 3,
+    "task": "TASK-003",
+    "summary": "Git checkpoint uses rev-parse HEAD, not tags. Rollback needs git clean --exclude=.ralph/",
+    "tags": ["git", "rollback", "checkpoint"],
+    "memory_ids": ["K-pattern-git-checkpoint", "K-constraint-git-clean-exclude"],
+    "source_iterations": [3],
+    "status": "active"
+  },
+  {
+    "iteration": 4,
+    "task": "TASK-004",
+    "summary": "Plan mutations use backup-then-modify pattern. jq select for ID lookup, not array index.",
+    "tags": ["plan-ops", "jq", "safety"],
+    "memory_ids": ["K-pattern-plan-backup", "K-decision-jq-select"],
+    "source_iterations": [4, 5],
+    "status": "active"
+  },
+  {
+    "iteration": 5,
+    "task": "TASK-005",
+    "summary": "Context truncation follows priority order: Accumulated Knowledge first, Skills second, Output Instructions third.",
+    "tags": ["context", "truncation", "prompt-assembly"],
+    "memory_ids": ["K-pattern-truncation-priority"],
+    "source_iterations": [5],
+    "status": "active"
+  },
+  {
+    "iteration": 7,
+    "task": "TASK-007",
+    "summary": "Compaction triggers checked in order: task metadata, semantic novelty, byte threshold, periodic interval.",
+    "tags": ["compaction", "triggers", "memory"],
+    "memory_ids": ["K-pattern-compaction-trigger-order", "K-constraint-novelty-threshold"],
+    "source_iterations": [6, 7],
+    "status": "active"
+  },
+  {
+    "iteration": 8,
+    "task": "TASK-006",
+    "summary": "Validation strategy 'lenient' allows lint failures. Unknown commands default to 'test' classification.",
+    "tags": ["validation", "strategy", "fail-safe"],
+    "memory_ids": ["K-decision-lenient-lint", "K-constraint-unknown-cmd-test"],
+    "source_iterations": [8],
+    "status": "active"
+  },
+  {
+    "iteration": 10,
+    "task": "TASK-007",
+    "summary": "Knowledge index memory IDs must follow K-<type>-<slug> pattern. Supersession requires [supersedes: ...] inline.",
+    "tags": ["knowledge-index", "memory-ids", "supersession"],
+    "memory_ids": ["K-constraint-memory-id-format", "K-pattern-supersession"],
+    "source_iterations": [9, 10],
+    "status": "active"
+  }
+]

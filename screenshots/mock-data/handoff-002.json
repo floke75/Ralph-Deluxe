@@ -1,0 +1,21 @@
+{
+  "task_completed": {
+    "task_id": "TASK-002",
+    "summary": "Main loop skeleton with argument parsing, signal handling, and stub functions.",
+    "fully_complete": true
+  },
+  "validation_passed": true,
+  "timestamp": "2026-02-08T09:22:10Z",
+  "deviations": [],
+  "bugs_encountered": [],
+  "architectural_notes": [
+    "State machine approach for main loop — cleaner than nested conditionals",
+    "Trap-based signal handling for SIGINT/SIGTERM ensures graceful shutdown"
+  ],
+  "files_touched": [
+    { "path": ".ralph/ralph.sh", "action": "created" }
+  ],
+  "constraints_discovered": [],
+  "summary": "Main loop skeleton with argument parsing, signal handling, and stub functions.",
+  "freeform": "Built ralph.sh from scratch with the main orchestrator loop. Used a state machine approach — each iteration goes through states: SELECT_TASK → CHECKPOINT → BUILD_PROMPT → INVOKE_CLI → PARSE_HANDOFF → VALIDATE → COMMIT_OR_ROLLBACK. Signal handlers trap SIGINT/SIGTERM for graceful shutdown: writes state.json before exit. All helper functions are stubs that print placeholder messages. bash -n and shellcheck both pass clean. The --dry-run flag skips actual CLI invocation but exercises the full loop flow."
+}
