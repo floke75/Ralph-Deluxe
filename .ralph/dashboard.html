@@ -1,4 +1,12 @@
 <!DOCTYPE html>
+<!--
+  Ralph dashboard contract:
+  - Polling cadence: JS pollData() runs every 3000ms to refresh orchestrator state/log files.
+  - Command write path: UI posts command JSON to /api/command; serve.py appends it to
+    .ralph/control/commands.json under the "pending" array.
+  - Expected command JSON shape: {"command": string, ...optional command-specific fields...}
+    (for example {"command": "pause"} or {"command": "inject-note", "note": "..."}).
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
