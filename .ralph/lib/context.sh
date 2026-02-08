@@ -334,6 +334,10 @@ get_prev_handoff_for_mode() {
             echo "### Structured context from previous iteration"
             echo "${l2}"
             ;;
+        *)
+            log "warn" "Unknown mode '${mode}' in get_prev_handoff_for_mode; falling back to handoff-only"
+            jq -r '.freeform // empty' "$latest"
+            ;;
     esac
 }
 
@@ -532,11 +536,12 @@ build_coding_prompt_v2() {
     local skills_content="$3"
     local failure_context="$4"
 
-    local handoffs_dir=".ralph/handoffs"
+    local base_dir="${RALPH_DIR:-.ralph}"
+    local handoffs_dir="${base_dir}/handoffs"
     local prompt=""
 
     local task_section
-    task_section="$(echo "$task_json" | jq -r '"## Current Task\nID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + (.acceptance_criteria | map("- " + .) | join("\n"))')"
+    task_section="$(echo "$task_json" | jq -r '"## Current Task\nID: \(.id)\nTitle: \(.title)\n\nDescription:\n\(.description)\n\nAcceptance Criteria:\n" + ((.acceptance_criteria // []) | map("- " + .) | join("\n"))')"
 
     local failure_section="## Failure Context
 No failure context."
@@ -561,7 +566,7 @@ ${constraints:-No constraints recorded.}
 ### Decisions
 ${decisions:-No decisions recorded.}"
         # In h+i mode, also point to the knowledge index
-        if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+        if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
             retrieved_memory_section+=$'\n\n### Knowledge Index\n- .ralph/knowledge-index.md'
         fi
     fi
@@ -578,9 +583,9 @@ ${narrative}"
 
     # Retrieved Project Memory: keyword-matched entries (handoff-plus-index only)
     local retrieved_project_memory_section=""
-    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+    if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
         local retrieved_project_memory
-        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" ".ralph/knowledge-index.md" 12)"
+        retrieved_project_memory="$(retrieve_relevant_knowledge "$task_json" "${base_dir}/knowledge-index.md" 12)"
         if [[ -n "$retrieved_project_memory" ]]; then
             retrieved_project_memory_section="## Retrieved Project Memory
 ${retrieved_project_memory}"
@@ -589,7 +594,7 @@ ${retrieved_project_memory}"
 
     # Accumulated Knowledge: static pointer (handoff-plus-index only, lowest truncation priority)
     local accumulated_knowledge_section=""
-    if [[ "$mode" == "handoff-plus-index" && -f ".ralph/knowledge-index.md" ]]; then
+    if [[ "$mode" == "handoff-plus-index" && -f "${base_dir}/knowledge-index.md" ]]; then
         accumulated_knowledge_section="## Accumulated Knowledge
 A knowledge index of learnings from all previous iterations is available at .ralph/knowledge-index.md. Consult it if you need project history beyond what's in the handoff above."
     fi
@@ -603,7 +608,10 @@ ${skills_content}"
 
     # Output Instructions: loaded from template file, with inline fallback
     local output_instructions
-    output_instructions="$(cat .ralph/templates/coding-prompt-footer.md 2>/dev/null)" || true
+    output_instructions="$(cat "${base_dir}/templates/coding-prompt-footer.md" 2>/dev/null)" || true
+    if [[ -z "$output_instructions" ]]; then
+        output_instructions="$(cat "${base_dir}/templates/coding-prompt.md" 2>/dev/null)" || true
+    fi
     if [[ -z "$output_instructions" ]]; then
         output_instructions="## When You're Done
 
