@@ -3,35 +3,62 @@ set -euo pipefail
 
 # compaction.sh — Knowledge indexing, compaction triggers, and verification
 #
-# PURPOSE: Manages the knowledge index lifecycle in handoff-plus-index mode.
-# Three main responsibilities:
-# 1. TRIGGER EVALUATION — decide whether to run the knowledge indexer before
-#    a coding iteration (4 triggers in priority order)
-# 2. INDEXER EXECUTION — invoke Claude to update knowledge-index.{md,json}
-# 3. POST-INDEXER VERIFICATION — validate output against 4 invariants;
-#    rollback to snapshots if any check fails
+# PURPOSE (handoff-plus-index mode):
+#   Keep long-running memory compact and queryable by consolidating new handoff
+#   knowledge into .ralph/knowledge-index.{md,json} before selected iterations.
+#   This module decides when indexing runs, orchestrates indexer execution, and
+#   guards index integrity with rollback-on-failure verification.
 #
-# Also provides L1/L2/L3 extraction functions used by context.sh and ralph.sh
-# for hierarchical context levels.
+# RESPONSIBILITIES:
+#   1. Trigger evaluation — choose if indexer should run before coding.
+#   2. Indexer execution — invoke CLI-backed memory iteration to regenerate
+#      knowledge-index artifacts from recent handoff data.
+#   3. Post-index verification — enforce invariants and restore snapshots when
+#      output is malformed, lossy, or internally inconsistent.
+#   4. Context extraction — expose L1/L2/L3 helpers consumed by context assembly.
 #
-# DEPENDENCIES:
-#   Called by: ralph.sh main loop (check_compaction_trigger, run_knowledge_indexer)
-#             context.sh (extract_l1 for L1 summaries)
-#   Calls: run_memory_iteration() from cli-ops.sh (to invoke Claude indexer)
-#   Depends on: jq, awk, comm, log() from ralph.sh
-#   Globals read: RALPH_COMPACTION_THRESHOLD_BYTES (default 32000),
-#     RALPH_COMPACTION_INTERVAL (default 5), RALPH_NOVELTY_OVERLAP_THRESHOLD (default 0.25),
-#     RALPH_NOVELTY_RECENT_HANDOFFS (default 3), RALPH_DIR, STATE_FILE, DRY_RUN
-#   Files read: .ralph/state.json, .ralph/handoffs/handoff-*.json,
-#     .ralph/knowledge-index.md, .ralph/knowledge-index.json
-#   Files written: .ralph/knowledge-index.md, .ralph/knowledge-index.json,
-#     .ralph/state.json (counter reset)
+# TRIGGER PRECEDENCE (first match wins; higher checks short-circuit lower):
+#   1. Task metadata trigger: next task needs_docs=true OR libraries[] non-empty.
+#   2. Semantic novelty trigger: overlap(task terms, recent handoff terms)
+#      < RALPH_NOVELTY_OVERLAP_THRESHOLD.
+#   3. Byte-threshold trigger: total_handoff_bytes_since_compaction
+#      > RALPH_COMPACTION_THRESHOLD_BYTES.
+#   4. Periodic trigger: coding_iterations_since_compaction
+#      >= RALPH_COMPACTION_INTERVAL.
 #
-# TRIGGER PRIORITY (first match wins):
-#   1. Task metadata — needs_docs=true or libraries[] non-empty
-#   2. Semantic novelty — term overlap < threshold between task and recent handoffs
-#   3. Byte threshold — accumulated handoff bytes since last compaction > threshold
-#   4. Periodic — coding iterations since last compaction >= interval
+# MODULE DEPENDENCIES:
+#   Called by:
+#     - ralph.sh main loop (check_compaction_trigger, run_knowledge_indexer)
+#     - context.sh (extract_l1)
+#   Calls into:
+#     - cli-ops.sh: run_memory_iteration() for CLI indexer invocation
+#     - jq/awk/sed/comm/sort/tail for JSON parsing + novelty calculations
+#   Shared globals:
+#     - RALPH_COMPACTION_THRESHOLD_BYTES (default 32000)
+#     - RALPH_COMPACTION_INTERVAL (default 5)
+#     - RALPH_NOVELTY_OVERLAP_THRESHOLD (default 0.25)
+#     - RALPH_NOVELTY_RECENT_HANDOFFS (default 3)
+#     - RALPH_DIR, STATE_FILE, DRY_RUN
+#   Files read:
+#     - .ralph/state.json
+#     - .ralph/handoffs/handoff-*.json
+#     - .ralph/templates/knowledge-index-prompt.md
+#     - .ralph/knowledge-index.{md,json}
+#   Files written:
+#     - .ralph/knowledge-index.{md,json} (by CLI/indexer)
+#     - .ralph/state.json (counter reset after successful verification)
+#
+# CLI / SCHEMA ASSUMPTIONS:
+#   - run_memory_iteration exits non-zero on invocation/runtime failure.
+#   - On success, CLI has written valid UTF-8 text/JSON files at expected paths.
+#   - knowledge-index.md begins with:
+#       # Knowledge Index
+#       Last updated: iteration N (...)
+#   - knowledge-index.json is a JSON array; if iteration records are present,
+#     each entry includes numeric iteration plus task/summary/tags fields.
+#   - Optional memory graph fields follow current conventions:
+#     memory_ids (array of strings), status (default "active"), supersedes
+#     (string or array of strings referencing existing memory_ids).
 #
 # VERIFICATION CHECKS (all must pass or changes are rolled back):
 #   1. Header format — "# Knowledge Index" + "Last updated: iteration N (...)"
@@ -124,8 +151,20 @@ calculate_term_overlap() {
 ###############################################################################
 
 # Evaluate whether knowledge indexing should run before this iteration.
-# Returns 0 if compaction needed, 1 if not. Logs which trigger fired.
-# 4 triggers evaluated in priority order (first match wins).
+# Trigger checks are ordered; first satisfied condition returns success (0).
+#
+# Inputs used for decision:
+#   - next task JSON fields: needs_docs, libraries[], title, description
+#   - recent handoff summaries/freeform text for novelty overlap
+#   - state counters: total_handoff_bytes_since_compaction,
+#     coding_iterations_since_compaction
+#   - environment thresholds: novelty overlap, byte threshold, interval
+# Side effects:
+#   - No artifact mutation; logs which trigger (if any) fired.
+# Failure/fallback behavior:
+#   - Missing/empty optional task JSON skips metadata + novelty checks.
+#   - Empty term signatures disable novelty trigger and continue precedence chain.
+#   - If no trigger matches, returns 1 so caller continues without indexing.
 #
 # Args: $1 = state file path, $2 = next task JSON (optional)
 # Returns: 0 = indexing needed, 1 = not needed
@@ -276,13 +315,30 @@ build_indexer_prompt() {
     echo "$prompt"
 }
 
-# Run the complete knowledge indexer cycle:
-# 1. Aggregate handoff L2 data since last compaction
-# 2. Snapshot existing knowledge-index files (for rollback)
-# 3. Invoke Claude via run_memory_iteration() — Claude writes the index files
-# 4. Verify the updated files against 4 invariants
-# 5. On verification failure: restore snapshots, return error
-# 6. On success: update compaction state counters
+# Run the complete knowledge indexer cycle.
+#
+# Indexer invocation path:
+#   1. Collect post-compaction L2 handoff data (build_compaction_input).
+#   2. Build prompt from template + existing markdown index + new handoff data.
+#   3. Snapshot current index files for transactional rollback.
+#   4. Call run_memory_iteration(prompt) to execute CLI/model writer path.
+#   5. Verify generated files across header, constraints, append-only, and
+#      memory-id invariants.
+#   6. Commit success by resetting compaction counters; otherwise restore prior
+#      snapshots and return failure.
+#
+# Inputs used for decision/execution:
+#   - handoff JSON files newer than last_compaction_iteration
+#   - optional task_json (currently accepted for caller symmetry/context)
+#   - template/index files under ${RALPH_DIR:-.ralph}
+# Side effects on knowledge/index artifacts:
+#   - Successful run updates .ralph/knowledge-index.{md,json} and state counters.
+#   - Failed run_memory_iteration keeps original files (via snapshot cleanup path).
+#   - Failed verification restores snapshot copies of both index artifacts.
+# Failure/fallback behavior:
+#   - If no new handoffs are eligible, function is a no-op success (returns 0).
+#   - CLI invocation failure returns 1 without mutating state counters.
+#   - Verification failure returns 1 after restoring previous index artifacts.
 #
 # Args: $1 = task JSON (optional, for context)
 # Returns: 0 on success, 1 on failure (indexer error or verification failure)
