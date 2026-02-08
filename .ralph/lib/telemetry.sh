@@ -3,9 +3,28 @@ set -euo pipefail
 
 # telemetry.sh — Event stream and operator control plane
 #
+# MODULE CONTRACT
+#   This module is intentionally file-backed and polling-based so the shell
+#   orchestrator can be observed/controlled without a daemon or message broker.
+#
+# Telemetry event format expectations (.ralph/logs/events.jsonl)
+#   - One compact JSON object per line (JSONL), append-only.
+#   - Required keys per line: timestamp (UTC RFC3339-ish, second precision),
+#     event (short machine key), message (human text), metadata (JSON object).
+#   - Readers are expected to process line-by-line in file order; they should
+#     tolerate partial trailing lines during concurrent append and retry later.
+#
+# Dashboard command polling model (.ralph/control/commands.json)
+#   - Dashboard writes commands to commands.json via serve.py into pending[].
+#   - Orchestrator polls by calling check_and_handle_commands() at loop
+#     boundaries (and during pause waits), snapshots pending[], executes each
+#     command, then clears pending[].
+#   - Delivery semantics are at-least-once best effort around crashes: commands
+#     may be replayed if a crash happens after execution but before clear.
+#
 # PURPOSE: Two responsibilities:
-# 1. Append-only JSONL event stream for observability (events.jsonl)
-# 2. Operator control command queue for pause/resume/skip/inject (commands.json)
+#   1. Append-only JSONL event stream for observability (events.jsonl)
+#   2. Operator control command queue for pause/resume/skip/inject (commands.json)
 #
 # The dashboard (dashboard.html) polls events.jsonl for display and POSTs to
 # serve.py to enqueue commands. This module reads and executes those commands.
@@ -40,6 +59,11 @@ RALPH_PAUSE_POLL_SECONDS="${RALPH_PAUSE_POLL_SECONDS:-5}"
 # Append a single event to the JSONL stream.
 # Args: $1 = event_type, $2 = message, $3 = metadata JSON (optional, default "{}")
 # SIDE EFFECT: Appends one line to RALPH_EVENTS_FILE. Creates parent dir if needed.
+# ORDERING/DURABILITY:
+#   - Ordering is the call order within this process (single append per call).
+#   - Each event is emitted with one jq write redirected with >> (append).
+#   - No fsync is forced; durability is OS/filesystem buffered best effort.
+#   - Consumers should treat newest lines as eventually durable, not transactional.
 emit_event() {
     local event_type="$1"
     local message="$2"
@@ -79,6 +103,8 @@ init_control_file() {
 
 # Read the pending commands array from the control file.
 # Stdout: JSON array of pending commands (or empty array if file missing)
+# POLLING SOURCE: This is the read-path for dashboard control input from
+# .ralph/control/commands.json and is called repeatedly by the orchestrator loop.
 read_pending_commands() {
     local control_file="${RALPH_CONTROL_FILE:-.ralph/control/commands.json}"
     if [[ -f "$control_file" ]]; then
@@ -103,6 +129,13 @@ clear_pending_commands() {
 # Command types: pause, resume, inject-note, skip-task
 # SIDE EFFECT: Sets RALPH_PAUSED=true/false. May call set_task_status() for skip.
 # INVARIANT: After return, pending[] is empty regardless of command outcomes.
+# MALFORMED/STALE COMMAND HANDLING:
+#   - Unknown command keys are logged and ignored (non-fatal).
+#   - Missing optional fields fall back to defaults (note/task_id).
+#   - "Stale" commands (e.g., resume while not paused, pause while already paused)
+#     are treated as idempotent state-set operations and still emit audit events.
+#   - If commands.json is invalid JSON, jq/set -e will fail fast so the caller can
+#     surface the issue rather than silently dropping operator intent.
 process_control_commands() {
     local commands
     commands="$(read_pending_commands)"
