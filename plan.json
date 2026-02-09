@@ -8,7 +8,7 @@
       "id": "TASK-101",
       "title": "Fix existing test failures and shellcheck warnings",
       "description": "Resolve 7 failing bats tests and 3 SC2034 shellcheck warnings. The failures are: (1) SC2034 unused variables in agents.sh:169 (task_title), context.sh:234 (trim_by), context.sh:256 (over). (2) Tests 127,128,168,172 in context.bats — truncate_to_budget section parsing/trimming behavior. (3) Tests 111,113 in compaction.bats — verify_knowledge_index schema validation. (4) Test 314 in validation.bats — empty RALPH_VALIDATION_COMMANDS array with set -u causes unbound variable error. These failures prevent the orchestrator's own validation gate from passing.",
-      "status": "pending",
+      "status": "in_progress",
       "order": 1,
       "skills": [
         "bash-conventions",
@@ -23,7 +23,7 @@
       ],
       "depends_on": [],
       "max_turns": 25,
-      "retry_count": 0,
+      "retry_count": 1,
       "max_retries": 3
     },
     {
