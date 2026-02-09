@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 node_modules/
+
+# Runtime artifacts (must not be git-tracked — rollback would erase them)
+.ralph/logs/
+.ralph/handoffs/
+.ralph/context/
+.ralph/knowledge-index.md
+.ralph/knowledge-index.json

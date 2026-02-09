@@ -109,7 +109,7 @@ run_agent_iteration() {
         return 0
     fi
 
-    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>/dev/null) || {
+    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>>"${RALPH_DIR}/logs/agent-stderr.log") || {
         log "error" "Agent CLI invocation failed with exit code $?"
         return 1
     }
