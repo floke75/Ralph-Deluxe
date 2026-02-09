@@ -139,6 +139,8 @@ parse_agent_output() {
 
     echo "$result" | jq . >/dev/null 2>&1 || {
         log "error" "Agent result is not valid JSON"
+        log "error" "Result starts with: ${result:0:200}"
+        echo "$response" > "${RALPH_DIR:-/tmp}/logs/debug-raw-response.json" 2>/dev/null || true
         return 1
     }
 
