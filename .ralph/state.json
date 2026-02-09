@@ -4,7 +4,7 @@
   "coding_iterations_since_compaction": 0,
   "total_handoff_bytes_since_compaction": 0,
   "last_task_id": null,
-  "started_at": null,
-  "status": "idle",
+  "started_at": "2026-02-09T16:16:42Z",
+  "status": "running",
   "mode": "agent-orchestrated"
 }
