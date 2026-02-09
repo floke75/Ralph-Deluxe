@@ -735,6 +735,12 @@ main() {
             '{mode: $mode, dry_run: $dry_run, resume: $resume}')"
     fi
 
+    # Ensure runtime directories exist before main loop.
+    # WHY: agent-orchestrated mode redirects stderr to context/.cycle-stderr on line 861;
+    # compaction writes to context/compaction-history/; handoffs/ and logs/validation/
+    # are created by their respective modules but must exist before first write.
+    mkdir -p "${RALPH_DIR}/context" "${RALPH_DIR}/handoffs" "${RALPH_DIR}/logs/validation"
+
     # INVARIANT: Git working tree must be clean before first checkpoint.
     # Without this, the first rollback would discard pre-existing uncommitted work.
     if [[ "$DRY_RUN" == "false" ]]; then
