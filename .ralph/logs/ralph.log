@@ -1,0 +1,4 @@
+[2026-02-09T15:54:21Z] [INFO] Ralph Deluxe starting (dry_run=false, resume=false, mode=agent-orchestrated)
+[2026-02-09T15:54:21Z] [INFO] Plan: plan.json (? tasks remaining)
+[2026-02-09T15:54:21Z] [INFO] Initialized progress log: /Users/johanfolke/Documents/Agentic_Workflows/Ralph-Deluxe/.ralph/progress-log.json
+[2026-02-09T15:54:21Z] [WARN] Working directory not clean, committing current state
