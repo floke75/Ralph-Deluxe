@@ -134,6 +134,11 @@ parse_agent_output() {
 
     if [[ -z "$result" ]]; then
         log "error" "Empty result in agent response"
+        log "error" "Response type: $(echo "$response" | jq -r '.type // "unknown"' 2>/dev/null)"
+        log "error" "Response subtype: $(echo "$response" | jq -r '.subtype // "unknown"' 2>/dev/null)"
+        log "error" "Is error: $(echo "$response" | jq -r '.is_error // "unknown"' 2>/dev/null)"
+        log "error" "Num turns: $(echo "$response" | jq -r '.num_turns // "unknown"' 2>/dev/null)"
+        echo "$response" > "${RALPH_DIR:-/tmp}/logs/debug-raw-response.json" 2>/dev/null || true
         return 1
     fi
 
