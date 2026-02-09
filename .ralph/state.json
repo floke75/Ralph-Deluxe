@@ -6,5 +6,5 @@
   "last_task_id": null,
   "started_at": null,
   "status": "idle",
-  "mode": "handoff-only"
+  "mode": "agent-orchestrated"
 }
