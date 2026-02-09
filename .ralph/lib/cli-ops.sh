@@ -88,7 +88,7 @@ run_coding_iteration() {
         return 0
     fi
 
-    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>/dev/null) || {
+    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>>"${RALPH_DIR:-.ralph}/logs/coding-stderr.log") || {
         # Retry-safe failure reporting: emits only deterministic log + exit code,
         # and does not create/emit partial handoff payloads.
         log "error" "Claude CLI invocation failed with exit code $?"
@@ -166,18 +166,66 @@ parse_handoff_output() {
         return 1
     }
 
-    if [[ -z "$result" ]]; then
-        log "error" "Empty result in response"
-        return 1
+    # Try to parse as JSON first (happy path)
+    if [[ -n "$result" ]]; then
+        if echo "$result" | jq . >/dev/null 2>&1; then
+            echo "$result"
+            return 0
+        fi
+        log "warn" "Result is not valid JSON, attempting synthetic handoff"
+    else
+        log "warn" "Empty result in response, attempting synthetic handoff"
     fi
 
-    # Validate the inner JSON is well-formed
-    echo "$result" | jq . >/dev/null 2>&1 || {
-        log "error" "Result is not valid JSON"
-        return 1
-    }
+    # FALLBACK: When the coding agent spends all turns on tool use (editing files)
+    # and doesn't produce structured JSON, create a synthetic handoff from git state.
+    # WHY: --json-schema is not enforced when the agent exits via max_turns or
+    # produces text instead of JSON after tool use.
+    local changed_files
+    changed_files="$(git diff --name-only 2>/dev/null | head -20)"
+    if [[ -z "$changed_files" ]]; then
+        changed_files="$(git diff --staged --name-only 2>/dev/null | head -20)"
+    fi
 
-    echo "$result"
+    if [[ -n "$changed_files" ]]; then
+        local files_json
+        files_json="$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(. != ""))')"
+        local num_turns
+        num_turns="$(echo "$response" | jq -r '.num_turns // 0' 2>/dev/null)"
+        local freeform_text="Synthetic handoff: coding agent made changes but did not produce structured output. Changed files: ${changed_files//$'\n'/, }. Agent used ${num_turns} turns."
+
+        # SIDE EFFECT: the non-JSON result text may contain useful context
+        if [[ -n "$result" ]]; then
+            # Truncate to keep the handoff reasonable
+            freeform_text="${freeform_text} Agent output summary: ${result:0:500}"
+        fi
+
+        local synthetic
+        synthetic="$(jq -cn \
+            --arg summary "Synthetic handoff — agent produced code changes without structured output" \
+            --arg freeform "$freeform_text" \
+            --argjson files "$files_json" \
+            '{
+                summary: $summary,
+                freeform: $freeform,
+                task_completed: {task_id: "unknown", summary: "Changes made", fully_complete: false},
+                deviations: [],
+                bugs_encountered: [],
+                architectural_notes: [],
+                files_touched: $files,
+                plan_amendments: [],
+                tests_added: [],
+                constraints_discovered: [],
+                unfinished_business: ["Agent did not produce structured handoff — review changes manually"],
+                recommendations: []
+            }')"
+        log "warn" "Created synthetic handoff from $(echo "$changed_files" | wc -l | tr -d ' ') changed files"
+        echo "$synthetic"
+        return 0
+    fi
+
+    log "error" "No structured output and no file changes — coding iteration produced nothing"
+    return 1
 }
 
 # Persist handoff JSON to a zero-padded numbered file.
