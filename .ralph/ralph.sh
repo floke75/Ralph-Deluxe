@@ -177,6 +177,29 @@ load_config() {
 ###############################################################################
 STATE_FILE="${RALPH_DIR}/state.json"
 
+# Ensure state file exists for fresh checkouts before any read_state() calls.
+# CALLER: main()
+# SIDE EFFECT: Writes bootstrap JSON to STATE_FILE when missing.
+ensure_state_file() {
+    if [[ -f "$STATE_FILE" ]]; then
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$STATE_FILE")"
+    cat > "$STATE_FILE" <<'EOF'
+{
+  "current_iteration": 0,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 0,
+  "total_handoff_bytes_since_compaction": 0,
+  "last_task_id": null,
+  "started_at": null,
+  "status": "idle",
+  "mode": "handoff-only"
+}
+EOF
+}
+
 # Read a single key from state.json. Returns raw jq output (string, number, etc.).
 # CALLER: main loop, run_coding_cycle() (for byte/iteration counters)
 read_state() {
@@ -701,6 +724,8 @@ main() {
     local remaining
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"
     log "info" "Plan: $PLAN_FILE ($remaining tasks remaining)"
+
+    ensure_state_file
 
     local current_iteration
     current_iteration="$(read_state "current_iteration")"
