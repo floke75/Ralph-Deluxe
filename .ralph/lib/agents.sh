@@ -53,6 +53,46 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
+# Required section headers for prepared coding prompts.
+# WHY: Agent-orchestrated mode now validates the same canonical section
+# structure expected by truncation logic and downstream prompt handling.
+readonly AGENT_PROMPT_REQUIRED_HEADERS=(
+    "## Current Task"
+    "## Failure Context"
+    "## Retrieved Memory"
+    "## Previous Handoff"
+    "## Retrieved Project Memory"
+    "## Skills"
+    "## Output Instructions"
+)
+
+# Validate that a prepared prompt contains all canonical sections.
+# Args: $1 = prepared prompt file path
+# Returns: 0 when valid, 1 when any required section is missing
+validate_prepared_prompt_structure() {
+    local prompt_file="$1"
+
+    if [[ ! -f "$prompt_file" ]]; then
+        log "error" "Prepared prompt not found for validation: $prompt_file"
+        return 1
+    fi
+
+    local missing=()
+    local header
+    for header in "${AGENT_PROMPT_REQUIRED_HEADERS[@]}"; do
+        if ! grep -Fq "$header" "$prompt_file"; then
+            missing+=("$header")
+        fi
+    done
+
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        log "error" "Prepared prompt missing required sections: ${missing[*]}"
+        return 1
+    fi
+
+    return 0
+}
+
 ###############################################################################
 # Agent invocation (generic)
 ###############################################################################
@@ -367,7 +407,28 @@ run_context_prep() {
 
     # In dry-run mode, create a stub prepared prompt
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        echo "## Current Task"$'\n'"Dry run — no prompt prepared."$'\n\n'"## Output Instructions"$'\n'"Dry run mode." > "${base_dir}/context/prepared-prompt.md"
+        cat > "${base_dir}/context/prepared-prompt.md" <<'EOF'
+## Current Task
+Dry run — no prompt prepared.
+
+## Failure Context
+No failure context.
+
+## Retrieved Memory
+No memory retrieved in dry run mode.
+
+## Previous Handoff
+No previous handoff in dry run mode.
+
+## Retrieved Project Memory
+No project memory in dry run mode.
+
+## Skills
+No skills loaded in dry run mode.
+
+## Output Instructions
+Dry run mode.
+EOF
         directive_json='{"action":"proceed","reason":"Dry run mode","stuck_detection":{"is_stuck":false},"context_notes":"Dry run — no real context assembly"}'
     fi
 
@@ -382,6 +443,11 @@ run_context_prep() {
     prompt_size=$(wc -c < "$prepared_prompt" | tr -d ' ')
     if [[ "$prompt_size" -lt 50 ]]; then
         log "error" "Prepared prompt is too small (${prompt_size} bytes) — likely malformed"
+        return 1
+    fi
+
+    if ! validate_prepared_prompt_structure "$prepared_prompt"; then
+        log "error" "Prepared prompt failed structural validation"
         return 1
     fi
 
