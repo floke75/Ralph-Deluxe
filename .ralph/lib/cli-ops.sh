@@ -181,18 +181,34 @@ parse_handoff_output() {
     # and doesn't produce structured JSON, create a synthetic handoff from git state.
     # WHY: --json-schema is not enforced when the agent exits via max_turns or
     # produces text instead of JSON after tool use.
-    local changed_files
-    changed_files="$(git diff --name-only 2>/dev/null | head -20)"
-    if [[ -z "$changed_files" ]]; then
-        changed_files="$(git diff --staged --name-only 2>/dev/null | head -20)"
-    fi
+    local changed_files_status
+    changed_files_status="$(git status --porcelain --untracked-files=all 2>/dev/null | head -20)"
 
-    if [[ -n "$changed_files" ]]; then
+    if [[ -n "$changed_files_status" ]]; then
         local files_json
-        files_json="$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(. != ""))')"
+        files_json="$(echo "$changed_files_status" | jq -R -s '
+            split("\n")
+            | map(select(length > 3))
+            | map(
+                . as $line
+                | ($line[0:2]) as $status
+                | ($line[3:]) as $raw_path
+                | ($raw_path | if contains(" -> ") then (split(" -> ") | .[1]) else . end) as $path
+                | {
+                    path: $path,
+                    action: (
+                        if $status == "??" or ($status | contains("A")) then "created"
+                        elif ($status | contains("D")) then "deleted"
+                        else "modified"
+                        end
+                    )
+                }
+            )')"
+        local changed_files
+        changed_files="$(echo "$files_json" | jq -r 'map(.path) | join(", ")')"
         local num_turns
         num_turns="$(echo "$response" | jq -r '.num_turns // 0' 2>/dev/null)"
-        local freeform_text="Synthetic handoff: coding agent made changes but did not produce structured output. Changed files: ${changed_files//$'\n'/, }. Agent used ${num_turns} turns."
+        local freeform_text="Synthetic handoff: coding agent made changes but did not produce structured output. Changed files: ${changed_files}. Agent used ${num_turns} turns."
 
         # SIDE EFFECT: the non-JSON result text may contain useful context
         if [[ -n "$result" ]]; then
@@ -216,10 +232,14 @@ parse_handoff_output() {
                 plan_amendments: [],
                 tests_added: [],
                 constraints_discovered: [],
-                unfinished_business: ["Agent did not produce structured handoff — review changes manually"],
+                unfinished_business: [{
+                    item: "Agent did not produce structured handoff",
+                    reason: "Fallback synthetic handoff was generated from git status",
+                    priority: "high"
+                }],
                 recommendations: []
             }')"
-        log "warn" "Created synthetic handoff from $(echo "$changed_files" | wc -l | tr -d ' ') changed files"
+        log "warn" "Created synthetic handoff from $(echo "$files_json" | jq 'length') changed files"
         echo "$synthetic"
         return 0
     fi
