@@ -282,10 +282,11 @@ build_context_prep_input() {
         manifest+="- Skills directory: ${base_dir}/skills/"$'\n'
     fi
 
-    # Templates
-    manifest+="- Output instructions template: ${base_dir}/templates/coding-prompt-footer.md"$'\n'
+    # Templates (read-only — agents must not modify these)
+    manifest+=$'\n'"**IMPORTANT**: Files under .ralph/templates/ and .ralph/skills/ are READ-ONLY canonical files. Do NOT modify them. Write your output only to .ralph/context/prepared-prompt.md."$'\n\n'
+    manifest+="- Output instructions template (READ-ONLY): ${base_dir}/templates/coding-prompt-footer.md"$'\n'
     if [[ "$current_iteration" -eq 1 && -f "${base_dir}/templates/first-iteration.md" ]]; then
-        manifest+="- First iteration template: ${base_dir}/templates/first-iteration.md"$'\n'
+        manifest+="- First iteration template (READ-ONLY): ${base_dir}/templates/first-iteration.md"$'\n'
     fi
 
     # Research requests from previous coding agent
@@ -535,8 +536,8 @@ build_context_post_input() {
     # Verification rules reminder
     manifest+=$'\n'"## Verification Rules"$'\n'
     manifest+="Your changes to knowledge-index.{md,json} will be verified by verify_knowledge_indexes()."$'\n'
-    manifest+="See .ralph/templates/knowledge-index-prompt.md for full verification rules."$'\n'
-    manifest+="The knowledge index prompt template is at: ${base_dir}/templates/knowledge-index-prompt.md"$'\n'
+    manifest+="See .ralph/templates/knowledge-index-prompt.md (READ-ONLY) for full verification rules."$'\n'
+    manifest+="The knowledge index prompt template is at: ${base_dir}/templates/knowledge-index-prompt.md (READ-ONLY, do not modify)"$'\n'
 
     echo "$manifest"
 }
