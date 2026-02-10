@@ -8,3 +8,5 @@ node_modules/
 .ralph/context/
 .ralph/knowledge-index.md
 .ralph/knowledge-index.json
+.ralph/state.json
+.ralph/progress-log.json
