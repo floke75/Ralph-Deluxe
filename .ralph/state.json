@@ -1,0 +1,10 @@
+{
+  "current_iteration": 0,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 0,
+  "total_handoff_bytes_since_compaction": 0,
+  "last_task_id": null,
+  "started_at": null,
+  "status": "idle",
+  "mode": "handoff-only"
+}
