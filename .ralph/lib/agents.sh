@@ -389,23 +389,11 @@ run_context_prep() {
         return 1
     fi
 
-    # Parse directive — the agent should return JSON matching context-prep-schema.json.
-    # FALLBACK: If the agent returned text instead of JSON (common when it spends all
-    # turns on tool use), check if prepared-prompt.md was written as a side effect.
-    # If it was, default to "proceed" — the agent did its job, just didn't format the output.
     local directive_json
-    if ! directive_json="$(parse_agent_output "$raw_response")"; then
-        local prepared_prompt="${base_dir}/context/prepared-prompt.md"
-        if [[ -f "$prepared_prompt" ]] && [[ "$(wc -c < "$prepared_prompt" | tr -d ' ')" -ge 50 ]]; then
-            log "warn" "Context prep agent returned text instead of JSON, but prepared-prompt.md exists — defaulting to proceed"
-            directive_json='{"action":"proceed","reason":"Agent wrote prompt but did not return structured directive","stuck_detection":{"is_stuck":false}}'
-        else
-            log "error" "Failed to parse context prep agent output and no prepared prompt found"
-            return 1
-        fi
-    fi
+    local prepared_prompt="${base_dir}/context/prepared-prompt.md"
 
-    # In dry-run mode, create a stub prepared prompt
+    # In dry-run mode, create a stub prepared prompt before any parse/fallback logic.
+    # This ensures dry-run behavior is deterministic even when the response is non-JSON.
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
         cat > "${base_dir}/context/prepared-prompt.md" <<'EOF'
 ## Current Task
@@ -430,10 +418,21 @@ No skills loaded in dry run mode.
 Dry run mode.
 EOF
         directive_json='{"action":"proceed","reason":"Dry run mode","stuck_detection":{"is_stuck":false},"context_notes":"Dry run — no real context assembly"}'
+    # Parse directive — the agent should return JSON matching context-prep-schema.json.
+    # FALLBACK: If the agent returned text instead of JSON (common when it spends all
+    # turns on tool use), check if prepared-prompt.md was written as a side effect.
+    # If it was, default to "proceed" — the agent did its job, just didn't format the output.
+    elif ! directive_json="$(parse_agent_output "$raw_response")"; then
+        if [[ -f "$prepared_prompt" ]] && [[ "$(wc -c < "$prepared_prompt" | tr -d ' ')" -ge 50 ]]; then
+            log "warn" "Context prep agent returned text instead of JSON, but prepared-prompt.md exists — defaulting to proceed"
+            directive_json='{"action":"proceed","reason":"Agent wrote prompt but did not return structured directive","stuck_detection":{"is_stuck":false}}'
+        else
+            log "error" "Failed to parse context prep agent output and no prepared prompt found"
+            return 1
+        fi
     fi
 
     # Verify the agent wrote the prompt file
-    local prepared_prompt="${base_dir}/context/prepared-prompt.md"
     if [[ ! -f "$prepared_prompt" ]]; then
         log "error" "Context prep agent did not write prepared-prompt.md"
         return 1

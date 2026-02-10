@@ -490,6 +490,17 @@ EOF
     [[ "$(echo "$output" | jq -r '.action')" == "proceed" ]]
 }
 
+@test "run_context_prep dry-run bypasses parse fallback when agent output is non-JSON" {
+    run_agent_iteration() { echo '{"type":"result","result":"not-json"}'; }
+
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
+    local output
+    output="$(run_context_prep "$task_json" 1 "agent-orchestrated")"
+
+    [[ "$(echo "$output" | jq -r '.reason')" == "Dry run mode" ]]
+    [ -f "$TEST_DIR/.ralph/context/prepared-prompt.md" ]
+}
+
 @test "run_context_prep fails when system prompt template is missing" {
     rm "$TEST_DIR/.ralph/templates/context-prep-prompt.md"
     local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
