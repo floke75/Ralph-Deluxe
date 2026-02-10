@@ -2,7 +2,7 @@
   "context_agent": {
     "model": null,
     "prep": {
-      "max_turns": 10,
+      "max_turns": 25,
       "prompt_template": "context-prep-prompt.md",
       "schema": "context-prep-schema.json",
       "mcp_config": "mcp-context.json",

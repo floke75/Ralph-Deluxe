@@ -2,12 +2,13 @@ __pycache__/
 *.pyc
 node_modules/
 
-# Ralph Deluxe runtime artifacts (regenerated each run)
+# Runtime artifacts (must not be git-tracked — rollback would erase them)
 .ralph/state.json
 .ralph/knowledge-index.md
 .ralph/knowledge-index.json
 .ralph/memory.jsonl
 .ralph/progress-log.md
+.ralph/progress-log.json
 .ralph/context/
 .ralph/handoffs/
 .ralph/logs/
