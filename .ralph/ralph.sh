@@ -291,6 +291,44 @@ build_memory_prompt() {
 }
 
 ###############################################################################
+# Template protection — detect and restore agent-overwritten templates
+###############################################################################
+
+# Verify templates match their git-committed versions.
+# Returns 0 if all clean, 1 if any were modified.
+# With --restore flag, auto-restores modified templates from git.
+# WHY: Agents run with --dangerously-skip-permissions and can write anywhere.
+# Rather than chmod-locking (which leaves files stuck at 444 on hard crashes),
+# we detect overwrites after the run and restore from git.
+# CALLER: main() end, or manual invocation.
+verify_templates() {
+    local restore="${1:-}"
+    local templates_dir="${RALPH_DIR}/templates"
+    local dirty=0
+
+    if ! git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+        log "debug" "Not a git repo; skipping template verification"
+        return 0
+    fi
+
+    for tmpl in "$templates_dir"/*.md; do
+        [[ -f "$tmpl" ]] || continue
+        local rel_path
+        rel_path="${tmpl#$PROJECT_ROOT/}"
+        if ! git -C "$PROJECT_ROOT" diff --quiet -- "$rel_path" 2>/dev/null; then
+            log "warn" "Template modified during run: $rel_path"
+            dirty=1
+            if [[ "$restore" == "--restore" ]]; then
+                git -C "$PROJECT_ROOT" checkout -- "$rel_path" 2>/dev/null || true
+                log "info" "Restored template: $rel_path"
+            fi
+        fi
+    done
+
+    return "$dirty"
+}
+
+###############################################################################
 # Helper: run a complete compaction cycle (legacy, used in handoff-only mode)
 ###############################################################################
 
@@ -1058,6 +1096,9 @@ main() {
             "$(jq -cn --arg status "$final_status" --argjson iter "$current_iteration" \
             '{status: $status, iterations_completed: $iter}')" || true
     fi
+
+    # Verify templates weren't modified during the run; restore if needed
+    verify_templates "--restore" || log "warn" "Templates were modified during run and have been restored"
 
     log "info" "Ralph Deluxe finished ($(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?") tasks remaining)"
 }

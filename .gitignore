@@ -1,3 +1,14 @@
 __pycache__/
 *.pyc
 node_modules/
+
+# Ralph Deluxe runtime artifacts (regenerated each run)
+.ralph/state.json
+.ralph/knowledge-index.md
+.ralph/knowledge-index.json
+.ralph/memory.jsonl
+.ralph/progress-log.md
+.ralph/context/
+.ralph/handoffs/
+.ralph/logs/
+.ralph/control/
