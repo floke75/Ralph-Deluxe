@@ -88,6 +88,7 @@ run_coding_iteration() {
         return 0
     fi
 
+    mkdir -p "${RALPH_DIR:-.ralph}/logs"
     response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>>"${RALPH_DIR:-.ralph}/logs/coding-stderr.log") || {
         # Retry-safe failure reporting: emits only deterministic log + exit code,
         # and does not create/emit partial handoff payloads.
