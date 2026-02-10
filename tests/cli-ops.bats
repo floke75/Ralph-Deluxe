@@ -109,6 +109,34 @@ JSON
     [[ "$status" -eq 1 ]]
 }
 
+
+@test "parse_handoff_output synthetic fallback includes untracked files" {
+    git init >/dev/null
+    echo "new" > created.txt
+
+    local resp='{"type":"result","subtype":"success","num_turns":4,"result":"not valid json"}'
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    echo "$output" | jq -e 'any(.files_touched[]; .path == "created.txt" and .action == "created")' >/dev/null
+}
+
+@test "parse_handoff_output synthetic fallback emits schema-compatible fields" {
+    git init >/dev/null
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    echo "tracked" > tracked.txt
+    git add tracked.txt
+    git commit -m "seed" >/dev/null
+    echo "tracked change" >> tracked.txt
+
+    local resp='{"type":"result","subtype":"success","num_turns":3,"result":"still not json"}'
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    echo "$output" | jq -e 'all(.files_touched[]; has("path") and has("action"))' >/dev/null
+    echo "$output" | jq -e '.unfinished_business[0] | has("item") and has("reason") and has("priority")' >/dev/null
+    echo "$output" | jq -e '.unfinished_business[0].priority == "high"' >/dev/null
+}
+
 # --- save_handoff tests ---
 
 @test "save_handoff creates numbered file" {

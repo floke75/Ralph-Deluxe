@@ -177,6 +177,29 @@ load_config() {
 ###############################################################################
 STATE_FILE="${RALPH_DIR}/state.json"
 
+# Ensure state file exists for fresh checkouts before any read_state() calls.
+# CALLER: main()
+# SIDE EFFECT: Writes bootstrap JSON to STATE_FILE when missing.
+ensure_state_file() {
+    if [[ -f "$STATE_FILE" ]]; then
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$STATE_FILE")"
+    cat > "$STATE_FILE" <<'EOF'
+{
+  "current_iteration": 0,
+  "last_compaction_iteration": 0,
+  "coding_iterations_since_compaction": 0,
+  "total_handoff_bytes_since_compaction": 0,
+  "last_task_id": null,
+  "started_at": null,
+  "status": "idle",
+  "mode": "handoff-only"
+}
+EOF
+}
+
 # Read a single key from state.json. Returns raw jq output (string, number, etc.).
 # CALLER: main loop, run_coding_cycle() (for byte/iteration counters)
 read_state() {
@@ -702,6 +725,8 @@ main() {
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"
     log "info" "Plan: $PLAN_FILE ($remaining tasks remaining)"
 
+    ensure_state_file
+
     local current_iteration
     current_iteration="$(read_state "current_iteration")"
 
@@ -734,6 +759,12 @@ main() {
             "$(jq -cn --arg mode "$MODE" --argjson dry_run "$DRY_RUN" --argjson resume "$RESUME" \
             '{mode: $mode, dry_run: $dry_run, resume: $resume}')"
     fi
+
+    # Ensure runtime directories exist before main loop.
+    # WHY: agent-orchestrated mode redirects stderr to context/.cycle-stderr on line 861;
+    # compaction writes to context/compaction-history/; handoffs/ and logs/validation/
+    # are created by their respective modules but must exist before first write.
+    mkdir -p "${RALPH_DIR}/context" "${RALPH_DIR}/handoffs" "${RALPH_DIR}/logs/validation"
 
     # INVARIANT: Git working tree must be clean before first checkpoint.
     # Without this, the first rollback would discard pre-existing uncommitted work.

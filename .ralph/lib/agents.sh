@@ -53,6 +53,46 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
+# Required section headers for prepared coding prompts.
+# WHY: Agent-orchestrated mode now validates the same canonical section
+# structure expected by truncation logic and downstream prompt handling.
+readonly AGENT_PROMPT_REQUIRED_HEADERS=(
+    "## Current Task"
+    "## Failure Context"
+    "## Retrieved Memory"
+    "## Previous Handoff"
+    "## Retrieved Project Memory"
+    "## Skills"
+    "## Output Instructions"
+)
+
+# Validate that a prepared prompt contains all canonical sections.
+# Args: $1 = prepared prompt file path
+# Returns: 0 when valid, 1 when any required section is missing
+validate_prepared_prompt_structure() {
+    local prompt_file="$1"
+
+    if [[ ! -f "$prompt_file" ]]; then
+        log "error" "Prepared prompt not found for validation: $prompt_file"
+        return 1
+    fi
+
+    local missing=()
+    local header
+    for header in "${AGENT_PROMPT_REQUIRED_HEADERS[@]}"; do
+        if ! grep -Fq "$header" "$prompt_file"; then
+            missing+=("$header")
+        fi
+    done
+
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        log "error" "Prepared prompt missing required sections: ${missing[*]}"
+        return 1
+    fi
+
+    return 0
+}
+
 ###############################################################################
 # Agent invocation (generic)
 ###############################################################################
@@ -109,7 +149,9 @@ run_agent_iteration() {
         return 0
     fi
 
-    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>/dev/null) || {
+    mkdir -p "${RALPH_DIR:-.ralph}/logs"
+
+    response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>>"${RALPH_DIR:-.ralph}/logs/agent-stderr.log") || {
         log "error" "Agent CLI invocation failed with exit code $?"
         return 1
     }
@@ -134,11 +176,18 @@ parse_agent_output() {
 
     if [[ -z "$result" ]]; then
         log "error" "Empty result in agent response"
+        log "error" "Response type: $(echo "$response" | jq -r '.type // "unknown"' 2>/dev/null)"
+        log "error" "Response subtype: $(echo "$response" | jq -r '.subtype // "unknown"' 2>/dev/null)"
+        log "error" "Is error: $(echo "$response" | jq -r '.is_error // "unknown"' 2>/dev/null)"
+        log "error" "Num turns: $(echo "$response" | jq -r '.num_turns // "unknown"' 2>/dev/null)"
+        echo "$response" > "${RALPH_DIR:-/tmp}/logs/debug-raw-response.json" 2>/dev/null || true
         return 1
     fi
 
     echo "$result" | jq . >/dev/null 2>&1 || {
         log "error" "Agent result is not valid JSON"
+        log "error" "Result starts with: ${result:0:200}"
+        echo "$response" > "${RALPH_DIR:-/tmp}/logs/debug-raw-response.json" 2>/dev/null || true
         return 1
     }
 
@@ -340,21 +389,50 @@ run_context_prep() {
         return 1
     fi
 
-    # Parse directive
     local directive_json
-    if ! directive_json="$(parse_agent_output "$raw_response")"; then
-        log "error" "Failed to parse context prep agent output"
-        return 1
-    fi
+    local prepared_prompt="${base_dir}/context/prepared-prompt.md"
 
-    # In dry-run mode, create a stub prepared prompt
+    # In dry-run mode, create a stub prepared prompt before any parse/fallback logic.
+    # This ensures dry-run behavior is deterministic even when the response is non-JSON.
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        echo "## Current Task"$'\n'"Dry run — no prompt prepared."$'\n\n'"## Output Instructions"$'\n'"Dry run mode." > "${base_dir}/context/prepared-prompt.md"
+        cat > "${base_dir}/context/prepared-prompt.md" <<'EOF'
+## Current Task
+Dry run — no prompt prepared.
+
+## Failure Context
+No failure context.
+
+## Retrieved Memory
+No memory retrieved in dry run mode.
+
+## Previous Handoff
+No previous handoff in dry run mode.
+
+## Retrieved Project Memory
+No project memory in dry run mode.
+
+## Skills
+No skills loaded in dry run mode.
+
+## Output Instructions
+Dry run mode.
+EOF
         directive_json='{"action":"proceed","reason":"Dry run mode","stuck_detection":{"is_stuck":false},"context_notes":"Dry run — no real context assembly"}'
+    # Parse directive — the agent should return JSON matching context-prep-schema.json.
+    # FALLBACK: If the agent returned text instead of JSON (common when it spends all
+    # turns on tool use), check if prepared-prompt.md was written as a side effect.
+    # If it was, default to "proceed" — the agent did its job, just didn't format the output.
+    elif ! directive_json="$(parse_agent_output "$raw_response")"; then
+        if [[ -f "$prepared_prompt" ]] && [[ "$(wc -c < "$prepared_prompt" | tr -d ' ')" -ge 50 ]]; then
+            log "warn" "Context prep agent returned text instead of JSON, but prepared-prompt.md exists — defaulting to proceed"
+            directive_json='{"action":"proceed","reason":"Agent wrote prompt but did not return structured directive","stuck_detection":{"is_stuck":false}}'
+        else
+            log "error" "Failed to parse context prep agent output and no prepared prompt found"
+            return 1
+        fi
     fi
 
     # Verify the agent wrote the prompt file
-    local prepared_prompt="${base_dir}/context/prepared-prompt.md"
     if [[ ! -f "$prepared_prompt" ]]; then
         log "error" "Context prep agent did not write prepared-prompt.md"
         return 1
@@ -364,6 +442,11 @@ run_context_prep() {
     prompt_size=$(wc -c < "$prepared_prompt" | tr -d ' ')
     if [[ "$prompt_size" -lt 50 ]]; then
         log "error" "Prepared prompt is too small (${prompt_size} bytes) — likely malformed"
+        return 1
+    fi
+
+    if ! validate_prepared_prompt_structure "$prepared_prompt"; then
+        log "error" "Prepared prompt failed structural validation"
         return 1
     fi
 

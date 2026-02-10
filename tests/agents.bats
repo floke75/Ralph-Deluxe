@@ -471,6 +471,17 @@ EOF
     [ -f "$TEST_DIR/.ralph/context/prepared-prompt.md" ]
 }
 
+@test "run_context_prep dry-run prepared prompt includes all canonical headers" {
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
+    run run_context_prep "$task_json" 1 "agent-orchestrated"
+    [ "$status" -eq 0 ]
+
+    local prompt_file="$TEST_DIR/.ralph/context/prepared-prompt.md"
+    [ -f "$prompt_file" ]
+    run validate_prepared_prompt_structure "$prompt_file"
+    [ "$status" -eq 0 ]
+}
+
 @test "run_context_prep dry-run returns valid directive JSON" {
     local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
     local output
@@ -479,10 +490,46 @@ EOF
     [[ "$(echo "$output" | jq -r '.action')" == "proceed" ]]
 }
 
+@test "run_context_prep dry-run bypasses parse fallback when agent output is non-JSON" {
+    run_agent_iteration() { echo '{"type":"result","result":"not-json"}'; }
+
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
+    local output
+    output="$(run_context_prep "$task_json" 1 "agent-orchestrated")"
+
+    [[ "$(echo "$output" | jq -r '.reason')" == "Dry run mode" ]]
+    [ -f "$TEST_DIR/.ralph/context/prepared-prompt.md" ]
+}
+
 @test "run_context_prep fails when system prompt template is missing" {
     rm "$TEST_DIR/.ralph/templates/context-prep-prompt.md"
     local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"]}'
     run run_context_prep "$task_json" 1 "agent-orchestrated"
+    [ "$status" -ne 0 ]
+}
+
+@test "validate_prepared_prompt_structure fails when a required header is missing" {
+    cat > "$TEST_DIR/.ralph/context/prepared-prompt.md" <<'EOF'
+## Current Task
+Test task
+
+## Failure Context
+None
+
+## Retrieved Memory
+None
+
+## Previous Handoff
+None
+
+## Retrieved Project Memory
+None
+
+## Output Instructions
+Done
+EOF
+
+    run validate_prepared_prompt_structure "$TEST_DIR/.ralph/context/prepared-prompt.md"
     [ "$status" -ne 0 ]
 }
 

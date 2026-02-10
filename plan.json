@@ -1,239 +1,79 @@
 {
-  "project": "ralph-deluxe",
+  "project": "ralph-deluxe-selfimprove",
   "branch": "main",
-  "max_iterations": 50,
+  "max_iterations": 20,
   "validation_strategy": "strict",
   "tasks": [
     {
-      "id": "TASK-001",
-      "title": "Create directory structure and config files",
-      "description": "Set up the project scaffold per the directory layout spec in Section 2.",
-      "status": "done",
+      "id": "TASK-101",
+      "title": "Fix existing test failures and shellcheck warnings",
+      "description": "Resolve 7 failing bats tests and 3 SC2034 shellcheck warnings. The failures are: (1) SC2034 unused variables in agents.sh:169 (task_title), context.sh:234 (trim_by), context.sh:256 (over). (2) Tests 127,128,168,172 in context.bats — truncate_to_budget section parsing/trimming behavior. (3) Tests 111,113 in compaction.bats — verify_knowledge_index schema validation. (4) Test 314 in validation.bats — empty RALPH_VALIDATION_COMMANDS array with set -u causes unbound variable error. These failures prevent the orchestrator's own validation gate from passing.",
+      "status": "in_progress",
       "order": 1,
-      "skills": ["bash-conventions", "jq-patterns"],
+      "skills": [
+        "bash-conventions",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
-        "All directories from the spec exist",
-        "Config JSON files are valid JSON",
-        "Template files contain placeholder markers"
+        "All 314+ bats tests pass (bats tests/ exits 0)",
+        "shellcheck .ralph/ralph.sh .ralph/lib/*.sh exits 0 at warning level",
+        "No behavior changes to the 307 currently passing tests"
       ],
       "depends_on": [],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
+      "max_turns": 25,
+      "retry_count": 1,
+      "max_retries": 3
     },
     {
-      "id": "TASK-002",
-      "title": "Core orchestrator loop skeleton",
-      "description": "Write ralph.sh with main loop structure, argument parsing, iteration flow, signal handling, logging. Stub all helper functions.",
+      "id": "TASK-102",
+      "title": "Add --status flag for state and plan summary",
+      "description": "Add a --status CLI flag to ralph.sh that prints a formatted summary of current orchestrator state (from state.json) and plan progress (from plan.json) without starting the main loop. Show iteration count, status, mode, last task ID, and counts of done/pending/failed/skipped tasks. Handle missing state.json gracefully.",
       "status": "pending",
       "order": 2,
-      "skills": ["bash-conventions"],
+      "skills": [
+        "bash-conventions",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
-        "bash -n ralph.sh passes syntax check",
-        "shellcheck ralph.sh passes",
-        "Script runs in --dry-run mode without errors",
-        "Stubs print placeholder messages"
+        "ralph.sh --status prints human-readable state and plan summary to stdout",
+        "ralph.sh --status exits 0 without entering the main loop",
+        "Handles missing state.json gracefully",
+        "All existing bats tests still pass",
+        "New bats tests cover basic output and edge cases"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 20,
+      "depends_on": [
+        "TASK-101"
+      ],
+      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
     {
-      "id": "TASK-003",
-      "title": "Git operations module",
-      "description": "Implement lib/git-ops.sh with create_checkpoint, rollback_to_checkpoint, commit_iteration, ensure_clean_state functions.",
+      "id": "TASK-103",
+      "title": "Add prerequisite tool checking at startup",
+      "description": "Add a check_prerequisites() function to ralph.sh that verifies required tools (jq, git, claude) exist on PATH at startup. Exit with clear error message if required tools are missing. Warn but continue if optional tools (bats, shellcheck) are missing. Call before source_libs() in main().",
       "status": "pending",
       "order": 3,
-      "skills": ["bash-conventions", "git-workflow", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
-        "bats tests pass covering checkpoint/rollback/commit cycle",
-        "Test creates files, checkpoints, makes changes, rolls back, verifies original state",
-        "New untracked files are cleaned up after rollback"
+        "ralph.sh exits 1 with clear error message if jq or git is not found",
+        "ralph.sh warns but continues if bats or shellcheck is not on PATH",
+        "check_prerequisites() is called in main() before source_libs()",
+        "All existing bats tests still pass",
+        "New bats tests cover missing required tool, missing optional tool, all present"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-004",
-      "title": "Plan operations module",
-      "description": "Implement lib/plan-ops.sh with get_next_task, set_task_status, get_task_by_id, apply_amendments, is_plan_complete, count_remaining_tasks.",
-      "status": "pending",
-      "order": 4,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "bats tests pass covering all operations",
-        "Task retrieval respects dependency ordering",
-        "Status updates persist",
-        "Amendments add/remove/modify tasks correctly",
-        "Safety guardrails block invalid amendments"
+      "depends_on": [
+        "TASK-101"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 20,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-005",
-      "title": "Context assembly module",
-      "description": "Implement lib/context.sh with build_coding_prompt, load_skills, get_prev_handoff_summary, estimate_tokens, truncate_to_budget.",
-      "status": "pending",
-      "order": 5,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "bats tests verify prompt assembly with various context combinations",
-        "Token estimation within 20% of manual count",
-        "Truncation preserves highest-priority content"
-      ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-006",
-      "title": "Validation gate module",
-      "description": "Implement lib/validation.sh with run_validation, evaluate_results, generate_failure_context. Support strict/lenient/tests_only strategies.",
-      "status": "pending",
-      "order": 6,
-      "skills": ["bash-conventions", "testing-bats"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "bats tests verify each validation strategy",
-        "Tests mock failing/passing commands",
-        "Failure context includes truncated error output"
-      ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-007",
-      "title": "Compaction trigger and strategy module",
-      "description": "Implement lib/compaction.sh with check_compaction_trigger, extract_l1/l2/l3, build_compaction_input, update_compaction_state.",
-      "status": "pending",
-      "order": 7,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "bats tests verify all three trigger conditions",
-        "L1/L2/L3 extraction produces correctly structured output",
-        "State counters reset correctly after compaction"
-      ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-008",
-      "title": "Claude Code CLI integration",
-      "description": "Implement run_coding_iteration, run_memory_iteration, parse_handoff_output, save_handoff with proper error handling.",
-      "status": "pending",
-      "order": 8,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "Dry-run mode works with mocked CLI responses",
-        "Response parsing correctly extracts structured output",
-        "Error states handled gracefully"
-      ],
-      "depends_on": ["TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006", "TASK-007"],
-      "max_turns": 25,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-009",
-      "title": "Wire everything together",
-      "description": "Connect all modules in ralph.sh, remove stubs, implement full iteration cycle with --resume flag and graceful shutdown.",
-      "status": "pending",
-      "order": 9,
-      "skills": ["bash-conventions"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "Full end-to-end dry run completes without errors",
-        "Orchestrator correctly sequences coding and memory iterations",
-        "State file updates correctly across iterations",
-        "Graceful shutdown preserves state",
-        "Resume continues from correct iteration"
-      ],
-      "depends_on": ["TASK-008"],
-      "max_turns": 25,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-010",
-      "title": "Prompt templates and skill files",
-      "description": "Write all markdown templates (coding-prompt.md, memory-prompt.md, first-iteration.md) and skill files (bash-conventions.md, testing-bats.md, jq-patterns.md, mcp-config.md, git-workflow.md).",
-      "status": "pending",
-      "order": 10,
-      "skills": [],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "All template files exist with appropriate instructions",
-        "Skill files are under 4KB each",
-        "Templates use clear section markers"
-      ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-011",
-      "title": "Comprehensive test suite",
-      "description": "Write bats-core integration tests covering full orchestrator cycle with mocked claude command, edge cases, error recovery.",
-      "status": "pending",
-      "order": 11,
-      "skills": ["testing-bats", "bash-conventions"],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "All bats tests pass",
-        "Edge cases for git operations, JSON parsing, compaction triggers covered",
-        "Tests run in under 30 seconds"
-      ],
-      "depends_on": ["TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006", "TASK-007"],
-      "max_turns": 25,
-      "retry_count": 0,
-      "max_retries": 2
-    },
-    {
-      "id": "TASK-012",
-      "title": "Documentation and verification",
-      "description": "Write README.md, finalize CLAUDE.md, run complete test suite, shellcheck, verify first real iteration.",
-      "status": "pending",
-      "order": 12,
-      "skills": [],
-      "needs_docs": false,
-      "libraries": [],
-      "acceptance_criteria": [
-        "README is complete and accurate",
-        "All tests pass",
-        "Shellcheck passes on all .sh files",
-        "Dry-run completes successfully"
-      ],
-      "depends_on": ["TASK-009", "TASK-010", "TASK-011"],
       "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
