@@ -182,7 +182,7 @@ parse_handoff_output() {
     # WHY: --json-schema is not enforced when the agent exits via max_turns or
     # produces text instead of JSON after tool use.
     local changed_files_status
-    changed_files_status="$(git status --porcelain --untracked-files=all 2>/dev/null | head -20)"
+    changed_files_status="$(git status --porcelain --untracked-files=all 2>/dev/null)"
 
     if [[ -n "$changed_files_status" ]]; then
         local files_json
