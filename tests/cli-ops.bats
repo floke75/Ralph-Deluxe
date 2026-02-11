@@ -223,7 +223,7 @@ JSON
 
 @test "run_coding_iteration dry-run returns valid response" {
     export DRY_RUN=true
-    local task='{"id":"TASK-001","max_turns":15}'
+    local task='{"id":"TASK-001"}'
     run run_coding_iteration "test prompt" "$task"
     [[ "$status" -eq 0 ]]
     # Output should be valid JSON
@@ -236,7 +236,7 @@ JSON
 
 @test "run_coding_iteration dry-run response is parseable by parse_handoff_output" {
     export DRY_RUN=true
-    local task='{"id":"TASK-001","max_turns":15}'
+    local task='{"id":"TASK-001"}'
     local resp
     resp="$(run_coding_iteration "test prompt" "$task")"
     run parse_handoff_output "$resp"
@@ -244,24 +244,22 @@ JSON
     echo "$output" | jq -e '.task_completed.fully_complete' >/dev/null
 }
 
-@test "run_coding_iteration respects max_turns from task JSON" {
+@test "run_coding_iteration uses system-level RALPH_DEFAULT_MAX_TURNS" {
     export DRY_RUN=true
-    # Capture log output to verify the max_turns flag
-    log() { echo "$*" >&2; }
-    export -f log
-    local task='{"id":"TASK-001","max_turns":25}'
-    run run_coding_iteration "test prompt" "$task"
-    [[ "$status" -eq 0 ]]
-    # The dry-run log should include --max-turns 25
-    [[ "$output" == *"--max-turns 25"* ]] || [[ "${lines[0]}" == *"--max-turns 25"* ]] || true
-}
-
-@test "run_coding_iteration uses default max_turns when not specified" {
-    export DRY_RUN=true
+    export RALPH_DEFAULT_MAX_TURNS=150
     local task='{"id":"TASK-001"}'
     run run_coding_iteration "test prompt" "$task"
     [[ "$status" -eq 0 ]]
-    # Should still succeed with default max_turns of 20
+    # The dry-run log should include --max-turns 150
+    [[ "$output" == *"--max-turns 150"* ]] || [[ "${lines[0]}" == *"--max-turns 150"* ]] || true
+}
+
+@test "run_coding_iteration uses default 200 when RALPH_DEFAULT_MAX_TURNS unset" {
+    export DRY_RUN=true
+    unset RALPH_DEFAULT_MAX_TURNS
+    local task='{"id":"TASK-001"}'
+    run run_coding_iteration "test prompt" "$task"
+    [[ "$status" -eq 0 ]]
     echo "$output" | jq . >/dev/null 2>&1
 }
 
@@ -299,7 +297,7 @@ exit 1
 SCRIPT
     chmod +x "$fake_bin/claude"
     export PATH="$fake_bin:$PATH"
-    local task='{"id":"TASK-001","max_turns":5}'
+    local task='{"id":"TASK-001"}'
     run run_coding_iteration "test prompt" "$task"
     [[ "$status" -ne 0 ]]
 }
@@ -323,7 +321,7 @@ SCRIPT
 
 @test "full dry-run pipeline: coding iteration -> parse -> save" {
     export DRY_RUN=true
-    local task='{"id":"TASK-010","max_turns":10}'
+    local task='{"id":"TASK-010"}'
 
     # Step 1: Run coding iteration
     local resp

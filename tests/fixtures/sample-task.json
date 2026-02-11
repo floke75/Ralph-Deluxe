@@ -4,7 +4,10 @@
   "description": "Create lib/context.sh with prompt assembly, skill loading, and token budgeting functions.",
   "status": "pending",
   "order": 5,
-  "skills": ["bash-conventions", "jq-patterns"],
+  "skills": [
+    "bash-conventions",
+    "jq-patterns"
+  ],
   "needs_docs": false,
   "libraries": [],
   "acceptance_criteria": [
@@ -13,8 +16,9 @@
     "Token estimation within 20% accuracy",
     "Truncation preserves highest-priority content"
   ],
-  "depends_on": ["TASK-004"],
-  "max_turns": 15,
+  "depends_on": [
+    "TASK-004"
+  ],
   "retry_count": 0,
   "max_retries": 2
 }

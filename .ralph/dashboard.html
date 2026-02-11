@@ -1227,7 +1227,7 @@ function SettingsPanel() {
     { key: "RALPH_MODE", label: "Mode", options: ["handoff-only", "handoff-plus-index"], current: state.orchestrator.mode || "handoff-only" },
     { key: "RALPH_VALIDATION_STRATEGY", label: "Validation", options: ["strict", "lenient", "tests_only"], current: "strict" },
     { key: "RALPH_COMPACTION_INTERVAL", label: "Compaction Interval", options: ["3", "5", "8", "10"], current: "5" },
-    { key: "RALPH_DEFAULT_MAX_TURNS", label: "Max Turns", options: ["10", "15", "20", "30"], current: "20" },
+    { key: "RALPH_DEFAULT_MAX_TURNS", label: "Max Tool Rounds", options: ["50", "100", "200", "500"], current: "200" },
     { key: "RALPH_MIN_DELAY_SECONDS", label: "Delay (sec)", options: ["0", "10", "30", "60"], current: "30" },
   ];
 

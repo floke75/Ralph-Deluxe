@@ -10,7 +10,10 @@
       "description": "Set up the project scaffold per the directory layout spec in Section 2.",
       "status": "done",
       "order": 1,
-      "skills": ["bash-conventions", "jq-patterns"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -19,7 +22,6 @@
         "Template files contain placeholder markers"
       ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -29,7 +31,9 @@
       "description": "Write ralph.sh with main loop structure, argument parsing, iteration flow, signal handling, logging. Stub all helper functions.",
       "status": "pending",
       "order": 2,
-      "skills": ["bash-conventions"],
+      "skills": [
+        "bash-conventions"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -38,8 +42,9 @@
         "Script runs in --dry-run mode without errors",
         "Stubs print placeholder messages"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 20,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -49,7 +54,11 @@
       "description": "Implement lib/git-ops.sh with create_checkpoint, rollback_to_checkpoint, commit_iteration, ensure_clean_state functions.",
       "status": "pending",
       "order": 3,
-      "skills": ["bash-conventions", "git-workflow", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "git-workflow",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -57,8 +66,9 @@
         "Test creates files, checkpoints, makes changes, rolls back, verifies original state",
         "New untracked files are cleaned up after rollback"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -68,7 +78,11 @@
       "description": "Implement lib/plan-ops.sh with get_next_task, set_task_status, get_task_by_id, apply_amendments, is_plan_complete, count_remaining_tasks.",
       "status": "pending",
       "order": 4,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -78,8 +92,9 @@
         "Amendments add/remove/modify tasks correctly",
         "Safety guardrails block invalid amendments"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 20,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -89,7 +104,11 @@
       "description": "Implement lib/context.sh with build_coding_prompt, load_skills, get_prev_handoff_summary, estimate_tokens, truncate_to_budget.",
       "status": "pending",
       "order": 5,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -97,8 +116,9 @@
         "Token estimation within 20% of manual count",
         "Truncation preserves highest-priority content"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -108,7 +128,10 @@
       "description": "Implement lib/validation.sh with run_validation, evaluate_results, generate_failure_context. Support strict/lenient/tests_only strategies.",
       "status": "pending",
       "order": 6,
-      "skills": ["bash-conventions", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -116,8 +139,9 @@
         "Tests mock failing/passing commands",
         "Failure context includes truncated error output"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -127,7 +151,11 @@
       "description": "Implement lib/compaction.sh with check_compaction_trigger, extract_l1/l2/l3, build_compaction_input, update_compaction_state.",
       "status": "pending",
       "order": 7,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -135,8 +163,9 @@
         "L1/L2/L3 extraction produces correctly structured output",
         "State counters reset correctly after compaction"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -146,7 +175,11 @@
       "description": "Implement run_coding_iteration, run_memory_iteration, parse_handoff_output, save_handoff with proper error handling.",
       "status": "pending",
       "order": 8,
-      "skills": ["bash-conventions", "jq-patterns", "testing-bats"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns",
+        "testing-bats"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -154,8 +187,14 @@
         "Response parsing correctly extracts structured output",
         "Error states handled gracefully"
       ],
-      "depends_on": ["TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006", "TASK-007"],
-      "max_turns": 25,
+      "depends_on": [
+        "TASK-002",
+        "TASK-003",
+        "TASK-004",
+        "TASK-005",
+        "TASK-006",
+        "TASK-007"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -165,7 +204,9 @@
       "description": "Connect all modules in ralph.sh, remove stubs, implement full iteration cycle with --resume flag and graceful shutdown.",
       "status": "pending",
       "order": 9,
-      "skills": ["bash-conventions"],
+      "skills": [
+        "bash-conventions"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -175,8 +216,9 @@
         "Graceful shutdown preserves state",
         "Resume continues from correct iteration"
       ],
-      "depends_on": ["TASK-008"],
-      "max_turns": 25,
+      "depends_on": [
+        "TASK-008"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -194,8 +236,9 @@
         "Skill files are under 4KB each",
         "Templates use clear section markers"
       ],
-      "depends_on": ["TASK-001"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -205,7 +248,10 @@
       "description": "Write bats-core integration tests covering full orchestrator cycle with mocked claude command, edge cases, error recovery.",
       "status": "pending",
       "order": 11,
-      "skills": ["testing-bats", "bash-conventions"],
+      "skills": [
+        "testing-bats",
+        "bash-conventions"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -213,8 +259,14 @@
         "Edge cases for git operations, JSON parsing, compaction triggers covered",
         "Tests run in under 30 seconds"
       ],
-      "depends_on": ["TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006", "TASK-007"],
-      "max_turns": 25,
+      "depends_on": [
+        "TASK-002",
+        "TASK-003",
+        "TASK-004",
+        "TASK-005",
+        "TASK-006",
+        "TASK-007"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -233,8 +285,11 @@
         "Shellcheck passes on all .sh files",
         "Dry-run completes successfully"
       ],
-      "depends_on": ["TASK-009", "TASK-010", "TASK-011"],
-      "max_turns": 15,
+      "depends_on": [
+        "TASK-009",
+        "TASK-010",
+        "TASK-011"
+      ],
       "retry_count": 0,
       "max_retries": 2
     }

@@ -191,7 +191,6 @@ apply_amendments() {
                     libraries: (.libraries // []),
                     acceptance_criteria: (.acceptance_criteria // []),
                     depends_on: (.depends_on // []),
-                    max_turns: (.max_turns // 20),
                     retry_count: (.retry_count // 0),
                     max_retries: (.max_retries // 2)
                 }')"

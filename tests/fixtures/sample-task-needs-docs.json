@@ -4,14 +4,19 @@
   "description": "Add Context7 MCP queries for external library documentation.",
   "status": "pending",
   "order": 8,
-  "skills": ["mcp-config"],
+  "skills": [
+    "mcp-config"
+  ],
   "needs_docs": true,
-  "libraries": ["@upstash/context7-mcp"],
+  "libraries": [
+    "@upstash/context7-mcp"
+  ],
   "acceptance_criteria": [
     "Memory iteration queries Context7 successfully"
   ],
-  "depends_on": ["TASK-007"],
-  "max_turns": 15,
+  "depends_on": [
+    "TASK-007"
+  ],
   "retry_count": 0,
   "max_retries": 2
 }

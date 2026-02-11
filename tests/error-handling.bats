@@ -74,7 +74,6 @@ EOF
       "libraries": [],
       "acceptance_criteria": ["Works"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }
@@ -279,8 +278,8 @@ MOCK
   "max_iterations": 10,
   "validation_strategy": "strict",
   "tasks": [
-    {"id": "TASK-001", "title": "Done", "description": "d", "status": "done", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2},
-    {"id": "TASK-002", "title": "Pending", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2}
+    {"id": "TASK-001", "title": "Done", "description": "d", "status": "done", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2},
+    {"id": "TASK-002", "title": "Pending", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2}
   ]
 }
 EOF
@@ -326,8 +325,8 @@ EOF
     new_task="$(jq -r '.tasks[] | select(.id == "TASK-NEW-001") | .title' "$TEST_DIR/test-plan.json")"
     [[ "$new_task" == "New edge case handling" ]]
 
-    # TASK-003 should have been modified
-    local max_turns
-    max_turns="$(jq -r '.tasks[] | select(.id == "TASK-003") | .max_turns' "$TEST_DIR/test-plan.json")"
-    [[ "$max_turns" -eq 25 ]]
+    # TASK-003 should have been modified (skills updated)
+    local skills
+    skills="$(jq -r '.tasks[] | select(.id == "TASK-003") | .skills | join(",")' "$TEST_DIR/test-plan.json")"
+    [[ "$skills" == "bash-conventions,jq-patterns" ]]
 }

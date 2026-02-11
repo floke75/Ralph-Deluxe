@@ -338,12 +338,12 @@ claude -p \
   --json-schema "$(cat .ralph/config/handoff-schema.json)" \
   --strict-mcp-config \
   --mcp-config .ralph/config/mcp-coding.json \
-  --max-turns 20 \
+  --max-turns 200 \
   --dangerously-skip-permissions \           # when RALPH_SKIP_PERMISSIONS=true
   --append-system-prompt-file "$skills_file"  # when skills exist
 ```
 
-The prompt is piped to stdin. Max turns read from `task.max_turns` (default 20).
+The prompt is piped to stdin. Max turns is a system-level safety net from `RALPH_DEFAULT_MAX_TURNS` (default 200), not configured per-task.
 
 ### 7.2 Memory/Indexer Iteration
 
@@ -947,7 +947,6 @@ Task plan at project root:
       "libraries": [],
       "acceptance_criteria": ["All directories from the spec exist"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }
