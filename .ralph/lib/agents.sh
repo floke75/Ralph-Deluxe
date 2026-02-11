@@ -15,8 +15,7 @@ set -euo pipefail
 #   Calls: compaction.sh (snapshot/verify/restore_knowledge_indexes, update_compaction_state),
 #          telemetry.sh (emit_event — guarded with declare -f)
 #   Globals read: RALPH_DIR, STATE_FILE, PROJECT_ROOT, DRY_RUN,
-#                 RALPH_SKIP_PERMISSIONS, RALPH_CONTEXT_AGENT_MODEL,
-#                 RALPH_AGENT_PASSES_ENABLED
+#                 RALPH_SKIP_PERMISSIONS, RALPH_CONTEXT_AGENT_MODEL
 #   Globals written: none
 #   Files read: .ralph/config/agents.json, .ralph/config/context-prep-schema.json,
 #               .ralph/config/context-post-schema.json, .ralph/config/mcp-context.json,

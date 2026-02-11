@@ -10,12 +10,15 @@
       "description": "Already completed task.",
       "status": "done",
       "order": 1,
-      "skills": ["bash-conventions"],
+      "skills": [
+        "bash-conventions"
+      ],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Task is complete"],
+      "acceptance_criteria": [
+        "Task is complete"
+      ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -25,12 +28,19 @@
       "description": "Task with a satisfied dependency.",
       "status": "pending",
       "order": 2,
-      "skills": ["bash-conventions", "jq-patterns"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns"
+      ],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Function works", "Tests pass"],
-      "depends_on": ["TASK-001"],
-      "max_turns": 20,
+      "acceptance_criteria": [
+        "Function works",
+        "Tests pass"
+      ],
+      "depends_on": [
+        "TASK-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -43,9 +53,10 @@
       "skills": [],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Output is valid"],
+      "acceptance_criteria": [
+        "Output is valid"
+      ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }

@@ -181,8 +181,8 @@ HANDOFF
     {
       "action": "modify",
       "task_id": "TASK-004",
-      "changes": { "title": "Updated title", "max_turns": 30 },
-      "reason": "need more turns"
+      "changes": { "title": "Updated title", "max_retries": 5 },
+      "reason": "task needs more attempts"
     }
   ]
 }
@@ -193,9 +193,9 @@ HANDOFF
     title="$(jq -r '.tasks[] | select(.id == "TASK-004") | .title' "$TEST_DIR/plan.json")"
     [ "$title" = "Updated title" ]
 
-    local turns
-    turns="$(jq -r '.tasks[] | select(.id == "TASK-004") | .max_turns' "$TEST_DIR/plan.json")"
-    [ "$turns" = "30" ]
+    local retries
+    retries="$(jq -r '.tasks[] | select(.id == "TASK-004") | .max_retries' "$TEST_DIR/plan.json")"
+    [ "$retries" = "5" ]
 }
 
 # --- apply_amendments: remove ---

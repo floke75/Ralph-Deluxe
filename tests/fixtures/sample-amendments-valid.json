@@ -25,10 +25,9 @@
       "action": "modify",
       "task_id": "TASK-003",
       "changes": {
-        "max_turns": 25,
         "skills": ["bash-conventions", "jq-patterns"]
       },
-      "reason": "Task is more complex than initially estimated"
+      "reason": "Task requires additional skill set"
     }
   ],
   "tests_added": [],

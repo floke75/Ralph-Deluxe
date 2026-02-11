@@ -71,7 +71,6 @@ EOF
       "libraries": [],
       "acceptance_criteria": ["Done"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -86,7 +85,6 @@ EOF
       "libraries": [],
       "acceptance_criteria": ["Works"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }
@@ -158,9 +156,9 @@ teardown() {
   "max_iterations": 50,
   "validation_strategy": "strict",
   "tasks": [
-    {"id": "T1", "title": "t1", "description": "d", "status": "pending", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2},
-    {"id": "T2", "title": "t2", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2},
-    {"id": "T3", "title": "t3", "description": "d", "status": "pending", "order": 3, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2}
+    {"id": "T1", "title": "t1", "description": "d", "status": "pending", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2},
+    {"id": "T2", "title": "t2", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2},
+    {"id": "T3", "title": "t3", "description": "d", "status": "pending", "order": 3, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2}
   ]
 }
 EOF
@@ -264,9 +262,9 @@ CONF
   "max_iterations": 50,
   "validation_strategy": "strict",
   "tasks": [
-    {"id": "T1", "title": "t1", "description": "d", "status": "pending", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2},
-    {"id": "T2", "title": "t2", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2},
-    {"id": "T3", "title": "t3", "description": "d", "status": "pending", "order": 3, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "max_turns": 15, "retry_count": 0, "max_retries": 2}
+    {"id": "T1", "title": "t1", "description": "d", "status": "pending", "order": 1, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2},
+    {"id": "T2", "title": "t2", "description": "d", "status": "pending", "order": 2, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2},
+    {"id": "T3", "title": "t3", "description": "d", "status": "pending", "order": 3, "skills": [], "needs_docs": false, "libraries": [], "acceptance_criteria": [], "depends_on": [], "retry_count": 0, "max_retries": 2}
   ]
 }
 EOF

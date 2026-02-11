@@ -26,7 +26,8 @@ set -euo pipefail
 #   Depends on: `claude` CLI binary on PATH, jq, log() from ralph.sh
 #   Reads files: .ralph/config/handoff-schema.json, .ralph/config/memory-output-schema.json,
 #                .ralph/config/mcp-coding.json, .ralph/config/mcp-memory.json
-#   Globals read: RALPH_SKIP_PERMISSIONS, DRY_RUN, RALPH_COMPACTION_MAX_TURNS
+#   Globals read: RALPH_SKIP_PERMISSIONS, DRY_RUN, RALPH_DEFAULT_MAX_TURNS,
+#                 RALPH_COMPACTION_MAX_TURNS
 #
 # DATA FLOW:
 #   run_coding_iteration(prompt, task_json, skills_file)
@@ -44,15 +45,18 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# Invoke claude for a coding iteration with task-specific config.
+# Invoke claude for a coding iteration.
 # Command construction/environment usage:
-#   - Reads `.max_turns` from task JSON (default 20) and maps to --max-turns.
+#   - Uses system-level RALPH_DEFAULT_MAX_TURNS (default 200) as a safety-net
+#     --max-turns value. Per-task turn limits are not supported — the coding
+#     agent works freely until it produces structured output, and max_retries
+#     controls how many full task attempts the orchestrator will make.
 #   - Loads handoff schema + coding MCP config from .ralph/config.
-#   - Honors env vars: RALPH_SKIP_PERMISSIONS, DRY_RUN.
+#   - Honors env vars: RALPH_SKIP_PERMISSIONS, DRY_RUN, RALPH_DEFAULT_MAX_TURNS.
 #   - Optionally appends an extra system prompt file for task-scoped skills.
 # The prompt is piped to stdin; skills are injected via
 # --append-system-prompt-file.
-# Args: $1 = prompt, $2 = task JSON (for max_turns), $3 = skills file path (optional)
+# Args: $1 = prompt, $2 = task JSON, $3 = skills file path (optional)
 # Stdout: raw JSON response envelope from claude CLI
 # Returns: 0 on success, 1 on CLI failure
 # SIDE EFFECT: In real mode, Claude executes code and modifies the working tree.
@@ -60,8 +64,6 @@ run_coding_iteration() {
     local prompt="$1"
     local task_json="$2"
     local skills_file="${3:-}"
-    local max_turns
-    max_turns=$(echo "$task_json" | jq -r '.max_turns // 20')
 
     local cmd_args=(
         -p
@@ -69,7 +71,7 @@ run_coding_iteration() {
         --json-schema "$(cat .ralph/config/handoff-schema.json)"
         --strict-mcp-config
         --mcp-config .ralph/config/mcp-coding.json
-        --max-turns "$max_turns"
+        --max-turns "${RALPH_DEFAULT_MAX_TURNS:-200}"
     )
 
     if [[ "${RALPH_SKIP_PERMISSIONS:-true}" == "true" ]]; then

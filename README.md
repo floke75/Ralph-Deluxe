@@ -143,7 +143,7 @@ All settings live in `.ralph/config/ralph.conf`. Key settings:
 | `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | Byte threshold to trigger knowledge indexing (~8000 tokens) |
 | `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | Term overlap ratio below which the semantic novelty trigger fires |
 | `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | Number of recent handoffs used for novelty comparison |
-| `RALPH_DEFAULT_MAX_TURNS` | 20 | Default max turns per coding iteration |
+| `RALPH_DEFAULT_MAX_TURNS` | 200 | Safety-net max tool-use rounds per coding iteration |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | Minimum delay between iterations (rate limit protection) |
 | `RALPH_CONTEXT_BUDGET_TOKENS` | 8000 | Token budget for assembled context prompts (handoff-only mode) |
 | `RALPH_CONTEXT_BUDGET_TOKENS_HPI` | 16000 | Token budget for handoff-plus-index mode (larger to fit full knowledge index) |
@@ -333,7 +333,6 @@ The `plan.json` file defines your project tasks:
         "Config files are valid JSON"
       ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }
@@ -355,9 +354,8 @@ The `plan.json` file defines your project tasks:
 | `libraries` | string[] | Libraries to fetch docs for via Context7 |
 | `acceptance_criteria` | string[] | Conditions that must be met |
 | `depends_on` | string[] | Task IDs that must be `done` before this task starts |
-| `max_turns` | number | Maximum Claude Code turns for this task |
 | `retry_count` | number | Current retry count (managed by orchestrator) |
-| `max_retries` | number | Maximum retries before marking as `failed` |
+| `max_retries` | number | Maximum full task attempts before marking as `failed` |
 
 See `examples/sample-project-plan.json` for a complete example.
 

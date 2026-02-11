@@ -10,7 +10,10 @@
       "description": "Create .ralph/lib/progress-log.sh with format_progress_entry_md() and format_progress_entry_json(). These extract structured fields from a handoff JSON file and produce a markdown block and a JSON object respectively. Markdown omits empty sections. JSON includes all fields with empty arrays for missing data. Both read task title from plan.json via get_task_by_id() when available.",
       "status": "pending",
       "order": 1,
-      "skills": ["bash-conventions", "jq-patterns"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -23,7 +26,6 @@
         "File uses #!/usr/bin/env bash and set -euo pipefail"
       ],
       "depends_on": [],
-      "max_turns": 20,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -33,7 +35,10 @@
       "description": "Add append_progress_entry() and init_progress_log() to .ralph/lib/progress-log.sh. append_progress_entry calls the formatting functions, appends the markdown entry to .ralph/progress-log.md, and upserts the JSON entry into .ralph/progress-log.json's entries array. It also regenerates the plan_summary section from plan.json. init_progress_log creates both files with initial structure if they don't exist. Uses atomic write pattern (tmp + mv) for JSON.",
       "status": "pending",
       "order": 2,
-      "skills": ["bash-conventions", "jq-patterns"],
+      "skills": [
+        "bash-conventions",
+        "jq-patterns"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -45,8 +50,9 @@
         "init_progress_log is idempotent (running twice doesn't duplicate content)",
         "JSON uses atomic write pattern (tmp + mv)"
       ],
-      "depends_on": ["PLOG-001"],
-      "max_turns": 20,
+      "depends_on": [
+        "PLOG-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -56,7 +62,9 @@
       "description": "Add append_progress_entry() call to ralph.sh main loop: (1) After validation pass in real mode, between set_task_status done and apply_amendments. (2) After set_task_status done in dry-run mode. (3) Add init_progress_log() call at startup after source_libs and init_control_file. All calls guarded with declare -f pattern. Failures are non-fatal (log warn, continue).",
       "status": "pending",
       "order": 3,
-      "skills": ["bash-conventions"],
+      "skills": [
+        "bash-conventions"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -68,8 +76,9 @@
         "bash -n ralph.sh passes syntax check",
         "shellcheck ralph.sh passes"
       ],
-      "depends_on": ["PLOG-002"],
-      "max_turns": 15,
+      "depends_on": [
+        "PLOG-002"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -91,8 +100,9 @@
         "Panel renders correctly when progress-log.json doesn't exist",
         "Follows existing dashboard component patterns (h() helper, StatusBadge)"
       ],
-      "depends_on": ["PLOG-001"],
-      "max_turns": 25,
+      "depends_on": [
+        "PLOG-001"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -102,7 +112,11 @@
       "description": "Create tests/progress-log.bats with ~20 tests covering format_progress_entry_md (7 tests: all sections, empty section omission, file count), format_progress_entry_json (5 tests: valid JSON, all fields, title lookup, fallback, empty arrays), append_progress_entry (5 tests: create files, append without overwrite, plan_summary, json validity, markdown table), init_progress_log (3 tests: creates files, idempotent, empty structure). Add 2-3 integration tests to tests/integration.bats.",
       "status": "pending",
       "order": 5,
-      "skills": ["testing-bats", "bash-conventions", "jq-patterns"],
+      "skills": [
+        "testing-bats",
+        "bash-conventions",
+        "jq-patterns"
+      ],
       "needs_docs": false,
       "libraries": [],
       "acceptance_criteria": [
@@ -114,8 +128,10 @@
         "Integration tests verify no progress log entry after validation failure",
         "Tests run in under 10 seconds"
       ],
-      "depends_on": ["PLOG-002", "PLOG-003"],
-      "max_turns": 25,
+      "depends_on": [
+        "PLOG-002",
+        "PLOG-003"
+      ],
       "retry_count": 0,
       "max_retries": 2
     },
@@ -134,8 +150,11 @@
         "CLAUDE.md directory structure includes new files",
         "Documentation is consistent with implementation"
       ],
-      "depends_on": ["PLOG-003", "PLOG-004", "PLOG-005"],
-      "max_turns": 15,
+      "depends_on": [
+        "PLOG-003",
+        "PLOG-004",
+        "PLOG-005"
+      ],
       "retry_count": 0,
       "max_retries": 2
     }

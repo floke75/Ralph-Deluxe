@@ -35,7 +35,6 @@ setup() {
       "libraries": [],
       "acceptance_criteria": ["Dirs exist"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -50,7 +49,6 @@ setup() {
       "libraries": [],
       "acceptance_criteria": ["Tests pass"],
       "depends_on": ["TASK-001"],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -65,7 +63,6 @@ setup() {
       "libraries": [],
       "acceptance_criteria": ["Rollback works"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 1,
       "max_retries": 2
     }

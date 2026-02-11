@@ -22,7 +22,6 @@
         "No behavior changes to the 307 currently passing tests"
       ],
       "depends_on": [],
-      "max_turns": 25,
       "retry_count": 1,
       "max_retries": 3
     },
@@ -48,7 +47,6 @@
       "depends_on": [
         "TASK-101"
       ],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -74,7 +72,6 @@
       "depends_on": [
         "TASK-101"
       ],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }

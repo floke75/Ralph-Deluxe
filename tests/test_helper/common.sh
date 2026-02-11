@@ -70,7 +70,6 @@ create_sample_plan() {
       "libraries": [],
       "acceptance_criteria": ["Task is complete"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -85,7 +84,6 @@ create_sample_plan() {
       "libraries": [],
       "acceptance_criteria": ["Function works", "Tests pass"],
       "depends_on": ["TASK-001"],
-      "max_turns": 20,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -100,7 +98,6 @@ create_sample_plan() {
       "libraries": [],
       "acceptance_criteria": ["Output is valid"],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }

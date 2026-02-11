@@ -13,9 +13,10 @@
       "skills": [],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Done"],
+      "acceptance_criteria": [
+        "Done"
+      ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -28,9 +29,10 @@
       "skills": [],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Done"],
+      "acceptance_criteria": [
+        "Done"
+      ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     },
@@ -43,9 +45,10 @@
       "skills": [],
       "needs_docs": false,
       "libraries": [],
-      "acceptance_criteria": ["Done"],
+      "acceptance_criteria": [
+        "Done"
+      ],
       "depends_on": [],
-      "max_turns": 15,
       "retry_count": 0,
       "max_retries": 2
     }
