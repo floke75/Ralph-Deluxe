@@ -757,9 +757,7 @@ main() {
 
     cd "$PROJECT_ROOT"
 
-    local mcp_transport
-    mcp_transport="$(detect_mcp_transport)"
-    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME, mode=$MODE, mcp_transport=$mcp_transport)"
+    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME, mode=$MODE)"
 
     local remaining
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"
@@ -784,6 +782,10 @@ main() {
 
     # Source modules AFTER config so they pick up config globals at source time
     source_libs
+
+    if declare -f detect_mcp_transport >/dev/null 2>&1; then
+        log "info" "MCP transport: $(detect_mcp_transport)"
+    fi
 
     # --- Initialize subsystems ---
     # All guarded with declare -f so startup doesn't fail if a module is missing.
