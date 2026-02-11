@@ -2,7 +2,8 @@
  * take-screenshots.mjs — Captures dashboard screenshots with mock data.
  *
  * Starts serve.py, copies mock data into position, intercepts the Tailwind
- * CDN with a locally-built CSS file, captures 6 views, then cleans up.
+ * CDN with a locally-built CSS file, captures 6 views (one per sidebar nav
+ * view + handoff detail), then cleans up.
  *
  * Intended to be invoked by capture.sh, which handles environment detection
  * and sets the env vars below. Can also be run directly if you set them yourself.
@@ -181,60 +182,54 @@ async function main() {
 
     console.log("Capturing screenshots...");
 
-    // 1. Main dashboard (handoff-plus-index mode, running)
-    await capturePage(context, "01-dashboard-main.png");
-
-    // 2. Handoff #3 selected (deviations, bugs, constraints)
-    await capturePage(context, "02-handoff-detail.png", async (page) => {
-      const btns = page.locator("button.w-7.h-7");
-      if (await btns.count() >= 3) {
-        await btns.nth(2).click();
-        await page.waitForTimeout(500);
-      }
-    });
-
-    // 3. Handoff-only mode
-    await capturePage(context, "03-handoff-only-mode.png", async (page) => {
-      const toggle = page.locator("button").filter({
-        has: page.locator("text=Handoff Only"),
-      }).first();
-      if (await toggle.count() > 0) {
-        await toggle.click();
-        await page.waitForTimeout(500);
-      }
-    });
-
-    // 4. Architecture tab
-    await capturePage(context, "04-architecture-tab.png", async (page) => {
-      const btn = page.locator("button").filter({ hasText: "architecture" }).first();
+    // Helper: click a sidebar nav button by its title attribute
+    async function clickSidebarNav(page, title) {
+      const btn = page.locator(`button[title="${title}"]`).first();
       if (await btn.count() > 0) {
         await btn.click();
         await page.waitForTimeout(500);
       }
-    });
+    }
 
-    // 5. Progress log detail view with expanded tasks
-    await capturePage(context, "05-progress-log-detail.png", async (page) => {
-      const detailBtn = page.locator("button").filter({ hasText: "detail" }).first();
-      if (await detailBtn.count() > 0) {
-        await detailBtn.click();
-        await page.waitForTimeout(500);
-      }
-      const t3 = page.locator("text=TASK-003").first();
-      if (await t3.count() > 0) { await t3.click(); await page.waitForTimeout(300); }
-      const t4 = page.locator("text=TASK-004").first();
-      if (await t4.count() > 0) { await t4.click(); await page.waitForTimeout(300); }
-    });
+    // 1. Run view — default (TaskPlan + HandoffViewer)
+    await capturePage(context, "01-dashboard-main.png");
 
-    // 6. Settings panel open
-    await capturePage(context, "06-settings-panel.png", async (page) => {
-      const hdr = page.locator("h2").filter({ hasText: "Settings" }).first();
-      if (await hdr.count() > 0) {
-        await hdr.click();
-        await page.waitForTimeout(500);
-      }
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // 2. Run view — navigate to handoff #3
+    await capturePage(context, "02-handoff-detail.png", async (page) => {
+      // Click "Next" chevron twice to get to handoff 3
+      const nextBtn = page.locator("button").filter({
+        has: page.locator("svg"),
+      });
+      // Use keyboard shortcut instead for reliability
+      await page.keyboard.press("ArrowRight");
       await page.waitForTimeout(300);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(500);
+    });
+
+    // 3. Log view — event log with filters
+    await capturePage(context, "03-log-view.png", async (page) => {
+      await clickSidebarNav(page, "Log");
+    });
+
+    // 4. Insights view — progress log
+    await capturePage(context, "04-insights-progress.png", async (page) => {
+      await clickSidebarNav(page, "Insights");
+    });
+
+    // 5. Insights view — knowledge index tab
+    await capturePage(context, "05-insights-knowledge.png", async (page) => {
+      await clickSidebarNav(page, "Insights");
+      const kiTab = page.locator("button").filter({ hasText: "Knowledge Index" }).first();
+      if (await kiTab.count() > 0) {
+        await kiTab.click();
+        await page.waitForTimeout(500);
+      }
+    });
+
+    // 6. Control view — settings + control plane + metrics
+    await capturePage(context, "06-control-view.png", async (page) => {
+      await clickSidebarNav(page, "Control");
     });
 
     await browser.close();
