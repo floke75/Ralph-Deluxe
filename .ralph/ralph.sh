@@ -584,7 +584,7 @@ run_coding_cycle() {
     fi
 
     # --- Build prompt ---
-    # CRITICAL: Prefer v2 (mode-aware, 8-section) over v1 (legacy).
+    # CRITICAL: Prefer v2 (mode-aware, 7-section) over v1 (legacy).
     # The declare -f guard enables graceful degradation if context.sh is an
     # older version that only has build_coding_prompt().
     if declare -f build_coding_prompt_v2 >/dev/null 2>&1; then

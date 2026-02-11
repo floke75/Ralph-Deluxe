@@ -37,7 +37,7 @@
 #   - mktemp files: transient jq output files created during writes and removed on rename.
 #
 # INVARIANTS:
-#   - Task status transitions: pending → in_progress → done|failed
+#   - Task status transitions: pending → in_progress → done|failed|skipped
 #   - Tasks with unmet depends_on are never returned by get_next_task()
 #   - Completed ("done") tasks are never removed by apply_amendments()
 #   - At most 3 amendments per iteration (prevents runaway plan mutation)

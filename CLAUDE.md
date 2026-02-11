@@ -222,12 +222,12 @@ Failure context truncated to 500 chars per check to conserve prompt budget.
 | `RALPH_DEFAULT_MAX_TURNS` | 200 | cli-ops.sh (safety-net `--max-turns` for coding agent) |
 | `RALPH_MIN_DELAY_SECONDS` | 30 | ralph.sh |
 | `RALPH_CONTEXT_AGENT_MODEL` | "" (default) | agents.sh (model override for context agent) |
-| `RALPH_AGENT_PASSES_ENABLED` | true | agents.sh (enable/disable optional passes) |
+| `RALPH_AGENT_PASSES_ENABLED` | true | ralph.sh (gates agent pass calls in main loop) |
 
 ### Terminology: Turns vs Retries
 
 - **`--max-turns`** (Claude CLI flag): Internal tool-use round-trips within a single CLI invocation. The coding agent uses `RALPH_DEFAULT_MAX_TURNS` (200) as a system-level safety net. This is NOT configurable per-task — the agent works freely until it produces structured output.
-- **`max_retries`** (plan.json task field): How many full task attempts the orchestrator will make. Each retry is a complete iteration cycle: prompt assembly → coding agent → validation gate → commit or rollback.
+- **`max_retries`** (plan.json task field): How many times the orchestrator will retry a failed task. Total attempts = initial + retries (e.g., `max_retries: 2` means 3 total attempts). Each retry is a complete iteration cycle: prompt assembly → coding agent → validation gate → commit or rollback.
 - **`max_turns`** in `agents.json`: System-level config for context agents and agent passes. Separate from the coding agent's turn limit.
 
 ## Documentation Standards for LLM Agents

@@ -995,11 +995,11 @@ Operator control queue:
 | `RALPH_COMPACTION_INTERVAL` | 5 | compaction.sh | Iterations between periodic indexer runs |
 | `RALPH_COMPACTION_THRESHOLD_BYTES` | 32000 | compaction.sh | Byte threshold for indexer trigger |
 | `RALPH_COMPACTION_MAX_TURNS` | 10 | cli-ops.sh | Max turns for memory/indexer CLI calls |
-| `RALPH_DEFAULT_MAX_TURNS` | 20 | cli-ops.sh | Default max turns for coding iterations |
+| `RALPH_DEFAULT_MAX_TURNS` | 200 | cli-ops.sh | Safety-net max tool-use rounds per coding iteration |
 | `RALPH_NOVELTY_OVERLAP_THRESHOLD` | 0.25 | compaction.sh | Novelty trigger threshold |
 | `RALPH_NOVELTY_RECENT_HANDOFFS` | 3 | compaction.sh | Handoffs for novelty calculation |
 | `RALPH_CONTEXT_AGENT_MODEL` | `""` | agents.sh | Model override for context agent |
-| `RALPH_AGENT_PASSES_ENABLED` | `true` | agents.sh | Enable/disable optional agent passes |
+| `RALPH_AGENT_PASSES_ENABLED` | `true` | ralph.sh | Enable/disable optional agent passes |
 | `RALPH_PAUSE_POLL_SECONDS` | 5 | telemetry.sh | Pause polling interval |
 
 ### 18.1 `agents.json` — Agent Pass Configuration
@@ -1008,7 +1008,7 @@ Operator control queue:
 {
   "context_agent": {
     "model": null,
-    "prep": { "max_turns": 10, "prompt_template": "context-prep-prompt.md", "schema": "context-prep-schema.json", "mcp_config": "mcp-context.json", "output_file": ".ralph/context/prepared-prompt.md" },
+    "prep": { "max_turns": 25, "prompt_template": "context-prep-prompt.md", "schema": "context-prep-schema.json", "mcp_config": "mcp-context.json", "output_file": ".ralph/context/prepared-prompt.md" },
     "post": { "max_turns": 10, "prompt_template": "context-post-prompt.md", "schema": "context-post-schema.json", "mcp_config": "mcp-context.json" }
   },
   "passes": [
