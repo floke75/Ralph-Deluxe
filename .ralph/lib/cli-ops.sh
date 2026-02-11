@@ -90,8 +90,6 @@ run_coding_iteration() {
         return 0
     fi
 
-    # Defensive: ensure stderr redirect target exists even when this helper is
-    # invoked outside the normal ralph.sh startup flow.
     mkdir -p "${RALPH_DIR:-.ralph}/logs"
 
     response=$(echo "$prompt" | claude "${cmd_args[@]}" 2>>"${RALPH_DIR:-.ralph}/logs/coding-stderr.log") || {
