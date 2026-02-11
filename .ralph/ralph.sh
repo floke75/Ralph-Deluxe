@@ -783,6 +783,10 @@ main() {
     # Source modules AFTER config so they pick up config globals at source time
     source_libs
 
+    if declare -f detect_mcp_transport >/dev/null 2>&1; then
+        log "info" "MCP transport: $(detect_mcp_transport)"
+    fi
+
     # --- Initialize subsystems ---
     # All guarded with declare -f so startup doesn't fail if a module is missing.
     # This enables partial-module testing and graceful degradation.

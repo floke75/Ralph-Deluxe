@@ -28,6 +28,11 @@ JSON
     # Empty MCP configs
     echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-coding.json"
     echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-memory.json"
+    echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-context.json"
+
+    # Clean transport env for deterministic tests
+    unset RALPH_MCP_TRANSPORT
+    unset CLAUDE_CODE_REMOTE
 
     cd "$TEST_DIR"
 
@@ -361,4 +366,66 @@ SCRIPT
     local saved_path
     saved_path="$(save_handoff "$result" 6)"
     [[ -f "$TEST_DIR/.ralph/handoffs/handoff-006.json" ]]
+}
+
+# --- MCP transport resolution tests ---
+
+@test "detect_mcp_transport defaults to stdio" {
+    unset RALPH_MCP_TRANSPORT
+    unset CLAUDE_CODE_REMOTE
+    run detect_mcp_transport
+    [[ "$output" == "stdio" ]]
+}
+
+@test "detect_mcp_transport returns http when RALPH_MCP_TRANSPORT=http" {
+    export RALPH_MCP_TRANSPORT=http
+    run detect_mcp_transport
+    [[ "$output" == "http" ]]
+}
+
+@test "detect_mcp_transport returns http when CLAUDE_CODE_REMOTE=true" {
+    unset RALPH_MCP_TRANSPORT
+    export CLAUDE_CODE_REMOTE=true
+    run detect_mcp_transport
+    [[ "$output" == "http" ]]
+}
+
+@test "detect_mcp_transport prefers RALPH_MCP_TRANSPORT over CLAUDE_CODE_REMOTE" {
+    export RALPH_MCP_TRANSPORT=stdio
+    export CLAUDE_CODE_REMOTE=true
+    run detect_mcp_transport
+    [[ "$output" == "stdio" ]]
+}
+
+@test "detect_mcp_transport normalizes uppercase HTTP to http" {
+    export RALPH_MCP_TRANSPORT=HTTP
+    run detect_mcp_transport
+    [[ "$output" == "http" ]]
+}
+
+@test "detect_mcp_transport rejects invalid value and defaults to stdio" {
+    export RALPH_MCP_TRANSPORT=websocket
+    run detect_mcp_transport
+    [[ "$output" == "stdio" ]]
+}
+
+@test "resolve_mcp_config returns stdio path by default" {
+    unset RALPH_MCP_TRANSPORT
+    unset CLAUDE_CODE_REMOTE
+    run resolve_mcp_config "mcp-context.json" "$TEST_DIR/.ralph/config"
+    [[ "$output" == "$TEST_DIR/.ralph/config/mcp-context.json" ]]
+}
+
+@test "resolve_mcp_config returns http path when transport is http" {
+    export RALPH_MCP_TRANSPORT=http
+    echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-context-http.json"
+    run resolve_mcp_config "mcp-context.json" "$TEST_DIR/.ralph/config"
+    [[ "$output" == "$TEST_DIR/.ralph/config/mcp-context-http.json" ]]
+}
+
+@test "resolve_mcp_config falls back to stdio path when http variant missing" {
+    export RALPH_MCP_TRANSPORT=http
+    # No mcp-context-http.json exists — should fall back
+    run resolve_mcp_config "mcp-context.json" "$TEST_DIR/.ralph/config"
+    [[ "$output" == "$TEST_DIR/.ralph/config/mcp-context.json" ]]
 }

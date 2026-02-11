@@ -610,3 +610,38 @@ EOF
     level="$(echo "$handoff_with_confidence" | jq -r '.confidence_level')"
     [[ "$level" == "low" ]]
 }
+
+# ===== MCP transport resolution in agents =====
+
+@test "run_context_prep uses HTTP config when resolve_mcp_config available and transport is http" {
+    # Source cli-ops.sh to make resolve_mcp_config available
+    source "$PROJ_ROOT/.ralph/lib/cli-ops.sh"
+
+    export RALPH_MCP_TRANSPORT=http
+    echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-context-http.json"
+
+    # Override run_agent_iteration to capture the mcp_config arg (arg $3)
+    local captured_mcp_config_file="$TEST_DIR/captured_mcp_config.txt"
+    run_agent_iteration() {
+        echo "$3" > "$captured_mcp_config_file"
+        # Return a valid dry-run-like response
+        echo '{"type":"result","subtype":"success","cost_usd":0,"duration_ms":0,"duration_api_ms":0,"is_error":false,"num_turns":1,"result":"{\"action\":\"proceed\",\"reason\":\"test\",\"stuck_detection\":{\"is_stuck\":false}}"}'
+    }
+
+    # Create required handoff for prep input
+    create_sample_handoff "$TEST_DIR/.ralph/handoffs/handoff-001.json" "TASK-002" true
+
+    # Update state to iteration 1
+    cat > "$TEST_DIR/.ralph/state.json" <<'EOF'
+{"current_iteration":1,"last_compaction_iteration":0,"coding_iterations_since_compaction":1,"total_handoff_bytes_since_compaction":0,"last_task_id":"TASK-001","started_at":"2026-02-06T10:00:00Z","status":"running"}
+EOF
+
+    local task_json='{"id":"TASK-002","title":"Test","description":"Test","acceptance_criteria":["works"],"depends_on":["TASK-001"],"skills":[],"needs_docs":false,"libraries":[]}'
+    run run_context_prep "$task_json" 2 "agent-orchestrated"
+    [[ "$status" -eq 0 ]]
+
+    # Verify the HTTP variant was actually selected
+    local used_config
+    used_config="$(cat "$captured_mcp_config_file")"
+    [[ "$used_config" == *"mcp-context-http.json" ]]
+}

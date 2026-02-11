@@ -27,7 +27,7 @@ set -euo pipefail
 #   Reads files: .ralph/config/handoff-schema.json, .ralph/config/memory-output-schema.json,
 #                .ralph/config/mcp-coding.json, .ralph/config/mcp-memory.json
 #   Globals read: RALPH_SKIP_PERMISSIONS, DRY_RUN, RALPH_DEFAULT_MAX_TURNS,
-#                 RALPH_COMPACTION_MAX_TURNS
+#                 RALPH_COMPACTION_MAX_TURNS, RALPH_MCP_TRANSPORT, CLAUDE_CODE_REMOTE
 #
 # DATA FLOW:
 #   run_coding_iteration(prompt, task_json, skills_file)
@@ -44,6 +44,54 @@ set -euo pipefail
 if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
+
+# Detect the active MCP transport mode.
+# Resolution: RALPH_MCP_TRANSPORT (explicit) > CLAUDE_CODE_REMOTE (auto) > "stdio" (default)
+# Stdout: "stdio" or "http"
+# CALLER: resolve_mcp_config(), ralph.sh startup log
+detect_mcp_transport() {
+    local transport
+    if [[ -n "${RALPH_MCP_TRANSPORT:-}" ]]; then
+        transport="${RALPH_MCP_TRANSPORT,,}"  # lowercase
+        if [[ "$transport" != "stdio" && "$transport" != "http" ]]; then
+            log "warn" "Invalid RALPH_MCP_TRANSPORT='${RALPH_MCP_TRANSPORT}'; expected stdio|http, defaulting to stdio"
+            transport="stdio"
+        fi
+        echo "$transport"
+        return
+    fi
+    if [[ "${CLAUDE_CODE_REMOTE:-}" == "true" ]]; then
+        echo "http"
+        return
+    fi
+    echo "stdio"
+}
+
+# Resolve an MCP config base name to a transport-appropriate file path.
+# In HTTP mode, maps e.g. "mcp-context.json" → "mcp-context-http.json".
+# Falls back to the base name if the HTTP variant does not exist.
+# Args: $1 = base config filename (e.g. "mcp-context.json")
+#        $2 = config directory (optional, default: .ralph/config)
+# Stdout: path to the resolved config file
+# CALLER: run_coding_iteration(), run_memory_iteration(), agents.sh
+resolve_mcp_config() {
+    local base_name="$1"
+    local config_dir="${2:-.ralph/config}"
+
+    local transport
+    transport="$(detect_mcp_transport)"
+
+    if [[ "$transport" == "http" ]]; then
+        local http_name="${base_name%.json}-http.json"
+        if [[ -f "${config_dir}/${http_name}" ]]; then
+            echo "${config_dir}/${http_name}"
+            return
+        fi
+        log "warn" "HTTP MCP config not found: ${config_dir}/${http_name}; falling back to ${base_name}"
+    fi
+
+    echo "${config_dir}/${base_name}"
+}
 
 # Invoke claude for a coding iteration.
 # Command construction/environment usage:
@@ -70,7 +118,7 @@ run_coding_iteration() {
         --output-format json
         --json-schema "$(cat .ralph/config/handoff-schema.json)"
         --strict-mcp-config
-        --mcp-config .ralph/config/mcp-coding.json
+        --mcp-config "$(resolve_mcp_config "mcp-coding.json")"
         --max-turns "${RALPH_DEFAULT_MAX_TURNS:-200}"
     )
 
@@ -121,7 +169,7 @@ run_memory_iteration() {
         --output-format json
         --json-schema "$(cat .ralph/config/memory-output-schema.json)"
         --strict-mcp-config
-        --mcp-config .ralph/config/mcp-memory.json
+        --mcp-config "$(resolve_mcp_config "mcp-memory.json")"
         --max-turns "${RALPH_COMPACTION_MAX_TURNS:-10}"
     )
 
