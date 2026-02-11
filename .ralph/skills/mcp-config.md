@@ -29,6 +29,17 @@ Two-step process — do NOT skip the first step:
 
 Always resolve first, then fetch. The library name alone is not a valid ID.
 
+## Transport Modes
+
+Ralph supports dual MCP transport: `stdio` (local, default) and `http` (cloud/web).
+
+- **Auto-detection**: When `CLAUDE_CODE_REMOTE=true`, HTTP transport is used automatically.
+- **Explicit config**: Set `RALPH_MCP_TRANSPORT=http` in `ralph.conf`.
+- **Resolution**: `resolve_mcp_config("mcp-context.json")` returns the transport-appropriate file path (e.g. `mcp-context-http.json` in HTTP mode).
+- **HTTP configs**: `mcp-*-http.json` files use `"type": "http"` with remote URLs instead of `"command"`/`"args"`.
+- **Memory server**: Only available in stdio mode. HTTP mode uses Context7 only.
+- **Fallback**: If the HTTP variant file is missing, falls back to the stdio config with a warning.
+
 ## Knowledge Graph Memory Server
 Stores entities and relations in `.ralph/memory.jsonl` for cross-session persistence.
 

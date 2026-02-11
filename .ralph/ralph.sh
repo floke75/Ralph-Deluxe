@@ -757,7 +757,9 @@ main() {
 
     cd "$PROJECT_ROOT"
 
-    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME, mode=$MODE)"
+    local mcp_transport
+    mcp_transport="$(detect_mcp_transport)"
+    log "info" "Ralph Deluxe starting (dry_run=$DRY_RUN, resume=$RESUME, mode=$MODE, mcp_transport=$mcp_transport)"
 
     local remaining
     remaining="$(count_remaining_tasks "$PLAN_FILE" 2>/dev/null || echo "?")"

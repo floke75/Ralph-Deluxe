@@ -72,9 +72,10 @@ ralph.sh memory/bootstrap paths
 | `.ralph/config/context-prep-schema.json` | JSON schema for context prep agent output |
 | `.ralph/config/context-post-schema.json` | JSON schema for context post agent output |
 | `.ralph/config/review-agent-schema.json` | JSON schema for code review agent output |
-| `.ralph/config/mcp-coding.json` | MCP config for coding iterations |
-| `.ralph/config/mcp-context.json` | MCP config for context agent (Context7 for library docs) |
-| `.ralph/config/mcp-memory.json` | MCP config for legacy memory/indexer iterations |
+| `.ralph/config/mcp-coding.json` | MCP config for coding iterations (stdio) |
+| `.ralph/config/mcp-context.json` | MCP config for context agent — Context7 (stdio) |
+| `.ralph/config/mcp-memory.json` | MCP config for legacy memory/indexer iterations (stdio) |
+| `.ralph/config/mcp-*-http.json` | HTTP transport MCP configs (auto-selected in cloud environments) |
 | `.ralph/config/memory-output-schema.json` | JSON schema for legacy memory compaction output |
 | `.ralph/templates/context-prep-prompt.md` | System prompt for context prep agent (agent-orchestrated mode) |
 | `.ralph/templates/context-post-prompt.md` | System prompt for context post agent (agent-orchestrated mode) |
@@ -93,6 +94,7 @@ ralph.sh memory/bootstrap paths
 | `.ralph/progress-log.{md,json}` | Auto-generated progress logs |
 | `.ralph/dashboard.html` | Single-file operator dashboard (vanilla JS + Tailwind) |
 | `.ralph/serve.py` | HTTP server for dashboard |
+| `.mcp.json` | Project-scoped MCP config for Claude Code Web (Context7 HTTP) |
 | `plan.json` | Task plan (project root) |
 | `tests/*.bats` | bats-core test suite (unit, integration, and error-handling coverage) |
 | `tests/test_helper/common.sh` | Shared bats helper for temp workspace setup/teardown |
@@ -163,6 +165,24 @@ In `handoff-plus-index` mode, the full contents of `.ralph/knowledge-index.md` a
 
 `retrieve_relevant_knowledge()` is retained for backward compatibility but is no longer called by `build_coding_prompt_v2()`.
 
+## MCP Transport
+
+| Transport | Detection | Context7 | Memory Server | Use Case |
+|-----------|-----------|----------|---------------|----------|
+| `stdio` (default) | Local CLI, `RALPH_MCP_TRANSPORT=stdio` | npx stdio process | npx stdio process | Local development |
+| `http` | `CLAUDE_CODE_REMOTE=true` or `RALPH_MCP_TRANSPORT=http` | HTTP endpoint | Unavailable (omitted) | Cloud / Claude Code Web |
+
+Resolution: `RALPH_MCP_TRANSPORT` > `CLAUDE_CODE_REMOTE` auto-detect > default `stdio`.
+
+`resolve_mcp_config(base_name)` in `cli-ops.sh` maps config filenames to transport variants:
+- `stdio`: `mcp-context.json` (unchanged)
+- `http`: `mcp-context-http.json` (HTTP endpoint URLs)
+- Fallback: if HTTP variant missing, uses stdio config with warning.
+
+Project-root `.mcp.json` provides Context7 (HTTP) for interactive Claude Code Web sessions (independent of orchestrator config).
+
+HTTP endpoint: `https://context7.liam.sh/mcp` (community, no API key). Official alternative: `https://api.context7.com/mcp` (requires `ctx7sk_*` key).
+
 ## Knowledge Indexer (compaction.sh) — h+i mode only
 
 ### Compaction Triggers (first match wins)
@@ -223,6 +243,7 @@ Failure context truncated to 500 chars per check to conserve prompt budget.
 | `RALPH_MIN_DELAY_SECONDS` | 30 | ralph.sh |
 | `RALPH_CONTEXT_AGENT_MODEL` | "" (default) | agents.sh (model override for context agent) |
 | `RALPH_AGENT_PASSES_ENABLED` | true | ralph.sh (gates agent pass calls in main loop) |
+| `RALPH_MCP_TRANSPORT` | "" (auto-detect) | cli-ops.sh, agents.sh |
 
 ### Terminology: Turns vs Retries
 

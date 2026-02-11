@@ -378,7 +378,12 @@ run_context_prep() {
     rm -f "${base_dir}/context/prepared-prompt.md"
 
     local schema_file="${base_dir}/config/context-prep-schema.json"
-    local mcp_config="${base_dir}/config/mcp-context.json"
+    local mcp_config
+    if declare -f resolve_mcp_config >/dev/null 2>&1; then
+        mcp_config="$(resolve_mcp_config "mcp-context.json" "${base_dir}/config")"
+    else
+        mcp_config="${base_dir}/config/mcp-context.json"
+    fi
     local max_turns
     max_turns="$(jq -r '.context_agent.prep.max_turns // 10' "${base_dir}/config/agents.json" 2>/dev/null || echo "10")"
     local model="${RALPH_CONTEXT_AGENT_MODEL:-}"
@@ -576,7 +581,12 @@ run_context_post() {
     fi
 
     local schema_file="${base_dir}/config/context-post-schema.json"
-    local mcp_config="${base_dir}/config/mcp-context.json"
+    local mcp_config
+    if declare -f resolve_mcp_config >/dev/null 2>&1; then
+        mcp_config="$(resolve_mcp_config "mcp-context.json" "${base_dir}/config")"
+    else
+        mcp_config="${base_dir}/config/mcp-context.json"
+    fi
     local max_turns
     max_turns="$(jq -r '.context_agent.post.max_turns // 10' "${base_dir}/config/agents.json" 2>/dev/null || echo "10")"
     local model="${RALPH_CONTEXT_AGENT_MODEL:-}"
@@ -855,7 +865,12 @@ run_agent_passes() {
         system_file="${base_dir}/templates/${prompt_template}"
 
         local pass_schema="${base_dir}/config/${schema_file}"
-        local pass_mcp="${base_dir}/config/${mcp_config}"
+        local pass_mcp
+        if declare -f resolve_mcp_config >/dev/null 2>&1; then
+            pass_mcp="$(resolve_mcp_config "$mcp_config" "${base_dir}/config")"
+        else
+            pass_mcp="${base_dir}/config/${mcp_config}"
+        fi
 
         if [[ ! -f "$pass_schema" || ! -f "$system_file" ]]; then
             log "warn" "Pass '${pass_name}' missing schema or template, skipping"
