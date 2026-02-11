@@ -50,8 +50,14 @@ fi
 # Stdout: "stdio" or "http"
 # CALLER: resolve_mcp_config(), ralph.sh startup log
 detect_mcp_transport() {
+    local transport
     if [[ -n "${RALPH_MCP_TRANSPORT:-}" ]]; then
-        echo "${RALPH_MCP_TRANSPORT}"
+        transport="${RALPH_MCP_TRANSPORT,,}"  # lowercase
+        if [[ "$transport" != "stdio" && "$transport" != "http" ]]; then
+            log "warn" "Invalid RALPH_MCP_TRANSPORT='${RALPH_MCP_TRANSPORT}'; expected stdio|http, defaulting to stdio"
+            transport="stdio"
+        fi
+        echo "$transport"
         return
     fi
     if [[ "${CLAUDE_CODE_REMOTE:-}" == "true" ]]; then

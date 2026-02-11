@@ -28,6 +28,7 @@ JSON
     # Empty MCP configs
     echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-coding.json"
     echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-memory.json"
+    echo '{"mcpServers":{}}' > "$TEST_DIR/.ralph/config/mcp-context.json"
 
     # Clean transport env for deterministic tests
     unset RALPH_MCP_TRANSPORT
@@ -392,6 +393,18 @@ SCRIPT
 @test "detect_mcp_transport prefers RALPH_MCP_TRANSPORT over CLAUDE_CODE_REMOTE" {
     export RALPH_MCP_TRANSPORT=stdio
     export CLAUDE_CODE_REMOTE=true
+    run detect_mcp_transport
+    [[ "$output" == "stdio" ]]
+}
+
+@test "detect_mcp_transport normalizes uppercase HTTP to http" {
+    export RALPH_MCP_TRANSPORT=HTTP
+    run detect_mcp_transport
+    [[ "$output" == "http" ]]
+}
+
+@test "detect_mcp_transport rejects invalid value and defaults to stdio" {
+    export RALPH_MCP_TRANSPORT=websocket
     run detect_mcp_transport
     [[ "$output" == "stdio" ]]
 }
