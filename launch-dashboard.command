@@ -8,12 +8,13 @@ PORT=8080
 URL="http://127.0.0.1:${PORT}/.ralph/dashboard.html"
 
 # Kill any existing server on this port
-lsof -ti:"$PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+lsof -ti:"$PORT" -c python 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 0.3
 
 # Start serve.py in background
 python3 .ralph/serve.py --port "$PORT" &
 SERVER_PID=$!
+trap "kill $SERVER_PID 2>/dev/null" INT TERM EXIT
 
 # Wait for server to be ready
 for i in $(seq 1 20); do
@@ -29,5 +30,4 @@ echo ""
 
 open "$URL"
 
-trap "kill $SERVER_PID 2>/dev/null" INT TERM EXIT
 wait $SERVER_PID 2>/dev/null

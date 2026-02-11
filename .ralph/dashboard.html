@@ -1517,7 +1517,7 @@ function initKeyboardShortcuts() {
     }
 
     // Pause/resume: space
-    else if (e.key === " ") {
+    else if (e.key === " " && state.activeView === "run") {
       e.preventDefault();
       postCommand({ command: isPaused() ? "resume" : "pause" });
     }
