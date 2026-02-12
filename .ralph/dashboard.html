@@ -14,12 +14,15 @@
   <title>Ralph Deluxe — Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
-    .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-    .scrollbar-thin::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #27272a; border-radius: 2px; }
+    details summary::-webkit-details-marker { display: none; }
+    details summary { cursor: pointer; user-select: none; }
   </style>
 </head>
 <body class="min-h-screen bg-zinc-950 text-zinc-300">
@@ -28,9 +31,9 @@
 
 <script>
 // ============================================================
-// Ralph Deluxe Dashboard — Single-file vanilla JS + Tailwind
-// Polls local files every 3 seconds. Control plane writes
-// commands via POST to serve.py.
+// Ralph Deluxe Dashboard — Redesigned
+// Single-file vanilla JS + Tailwind. Sidebar navigation with
+// 4 focused views. Polls local files every 3 seconds.
 // Serve via: python3 .ralph/serve.py --port 8080
 // Then open: http://localhost:8080/.ralph/dashboard.html
 // ============================================================
@@ -54,16 +57,15 @@ const state = {
   events: [],
   // UI state
   selectedHandoff: 0,
-  activeTab: "dashboard",
-  viewMode: null, // null = use orchestrator mode; set by toggle
+  activeView: "run",  // "run" | "log" | "insights" | "control"
+  insightsTab: "progress", // "progress" | "knowledge"
+  eventLogFilter: "all", // "all" | "iterations" | "validations" | "notes" | "errors"
   error: null
 };
 
 // --- Form State (persisted across full-rebuild render cycles) ---
 const formState = {
   noteText: "",
-  settingsOpen: false,
-  controlOpen: true,
   lastCommandStatus: null, // { ok: bool, message: string, ts: number }
 };
 
@@ -111,7 +113,6 @@ async function postSettings(settings) {
 }
 
 // --- Fetch Helpers ---
-// Base path: dashboard lives at .ralph/dashboard.html, project root is ../
 const BASE = "../";
 
 async function fetchJSON(path) {
@@ -126,26 +127,21 @@ async function fetchText(path) {
   return resp.text();
 }
 
-
 function normalizeKnowledgeIndexEntry(entry) {
   if (!entry || typeof entry !== "object") return null;
-
   const memoryIds = Array.isArray(entry.memory_ids)
     ? entry.memory_ids.filter(v => typeof v === "string")
     : [];
-
   let sourceIterations = [];
   if (Array.isArray(entry.source_iterations)) {
     sourceIterations = entry.source_iterations.filter(v => Number.isInteger(v));
   } else if (Number.isInteger(entry.iteration)) {
     sourceIterations = [entry.iteration];
   }
-
   const status = typeof entry.status === "string" ? entry.status : "active";
   const supersedes = Array.isArray(entry.supersedes)
     ? entry.supersedes.filter(v => typeof v === "string")
     : (typeof entry.supersedes === "string" ? [entry.supersedes] : []);
-
   return {
     iteration: Number.isInteger(entry.iteration) ? entry.iteration : 0,
     task: typeof entry.task === "string" ? entry.task : "",
@@ -168,7 +164,6 @@ function parseJSONL(text) {
 // --- Data Polling ---
 async function pollData() {
   try {
-    // Fetch all data sources in parallel
     const [orchState, plan, indexData, progressData, eventsText] = await Promise.all([
       fetchJSON(".ralph/state.json"),
       fetchJSON("plan.json"),
@@ -176,17 +171,14 @@ async function pollData() {
       fetchJSON(".ralph/progress-log.json"),
       fetchText(".ralph/logs/events.jsonl")
     ]);
-
     if (orchState) state.orchestrator = orchState;
     if (plan) state.plan = plan;
     if (indexData) state.knowledgeIndex = Array.isArray(indexData) ? indexData.map(normalizeKnowledgeIndexEntry).filter(Boolean) : [];
     if (progressData) state.progressLog = progressData;
     state.events = parseJSONL(eventsText);
 
-    // Discover handoffs based on iteration count or probe sequentially
     const maxIter = state.orchestrator.current_iteration || 0;
     const handoffPromises = [];
-    // Probe up to maxIter + 5 to be safe, or at least 20
     const probeMax = Math.max(maxIter + 5, 20);
     for (let i = 1; i <= probeMax; i++) {
       const num = String(i).padStart(3, "0");
@@ -195,16 +187,13 @@ async function pollData() {
     const handoffResults = await Promise.all(handoffPromises);
     state.handoffs = handoffResults.filter(Boolean);
 
-    // Auto-select latest handoff if we haven't interacted
     if (state.handoffs.length > 0 && state.selectedHandoff >= state.handoffs.length) {
       state.selectedHandoff = state.handoffs.length - 1;
     }
-
     state.error = null;
   } catch (err) {
     state.error = "Polling error: " + err.message;
   }
-
   render();
 }
 
@@ -217,19 +206,15 @@ function computeMetrics() {
   const iterStarts = events.filter(e => e.event === "iteration_start");
   const valPass = events.filter(e => e.event === "validation_pass").length;
   const valFail = events.filter(e => e.event === "validation_fail").length;
-
-  // Count rollbacks from validation_fail events
   const rollbacks = valFail;
 
-  // Total files touched across all handoffs
   let totalFiles = 0;
-  for (const h of handoffs) {
-    const ft = h.files_touched;
+  for (const ho of handoffs) {
+    const ft = ho.files_touched;
     if (Array.isArray(ft)) totalFiles += ft.length;
     else if (typeof ft === "number") totalFiles += ft;
   }
 
-  // Average iteration duration from events
   let avgDuration = 0;
   const iterEnds = events.filter(e => e.event === "iteration_end");
   if (iterStarts.length > 0 && iterEnds.length > 0) {
@@ -243,12 +228,10 @@ function computeMetrics() {
     if (counted > 0) avgDuration = Math.round(totalMs / counted / 1000);
   }
 
-  // Compaction count
   const compactions = events.filter(e =>
     e.event === "iteration_start" && e.metadata && e.metadata.mode === "compaction"
   ).length;
 
-  // Elapsed time
   let elapsed = 0;
   const startedAt = state.orchestrator.started_at;
   if (startedAt) {
@@ -295,120 +278,239 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
+function isPaused() {
+  const status = state.orchestrator.status || "idle";
+  if (status === "paused") return true;
+  return state.events.some(e => e.event === "pause" &&
+    !state.events.some(r => r.event === "resume" &&
+      new Date(r.timestamp) > new Date(e.timestamp)));
+}
+
+// --- SVG Icons (inline, no dependencies) ---
+function iconSvg(name) {
+  const icons = {
+    run: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    log: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>',
+    insights: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>',
+    control: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>',
+    pause: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    resume: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    chevronLeft: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>',
+    chevronRight: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>',
+  };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("class", "w-5 h-5");
+  svg.innerHTML = icons[name] || "";
+  return svg;
+}
+
 // --- Components ---
+
 function StatusBadge(status) {
   const colors = {
-    done: "bg-emerald-900/60 text-emerald-300 border-emerald-700/50",
-    in_progress: "bg-amber-900/60 text-amber-300 border-amber-700/50",
-    pending: "bg-zinc-800/60 text-zinc-400 border-zinc-700/50",
-    failed: "bg-red-900/60 text-red-300 border-red-700/50",
-    skipped: "bg-zinc-800/40 text-zinc-500 border-zinc-700/30",
-    running: "bg-blue-900/60 text-blue-300 border-blue-600/50",
-    idle: "bg-zinc-800/60 text-zinc-400 border-zinc-700/50",
-    paused: "bg-orange-900/60 text-orange-300 border-orange-700/50",
-    completed: "bg-emerald-900/60 text-emerald-300 border-emerald-700/50",
+    done: "bg-emerald-900/40 text-emerald-400 border-emerald-800/40",
+    completed: "bg-emerald-900/40 text-emerald-400 border-emerald-800/40",
+    in_progress: "bg-blue-900/40 text-blue-400 border-blue-800/40",
+    running: "bg-blue-900/40 text-blue-400 border-blue-800/40",
+    pending: "bg-zinc-800/40 text-zinc-500 border-zinc-700/30",
+    failed: "bg-red-900/40 text-red-400 border-red-800/40",
+    skipped: "bg-zinc-800/30 text-zinc-600 border-zinc-700/20",
+    paused: "bg-amber-900/40 text-amber-400 border-amber-800/40",
+    idle: "bg-zinc-800/40 text-zinc-500 border-zinc-700/30",
   };
   return h("span", {
     className: `px-2 py-0.5 rounded text-xs font-mono border ${colors[status] || colors.pending}`
   }, status || "unknown");
 }
 
-function ModeToggle() {
-  const mode = getViewMode();
-  const container = h("div", { className: "flex items-center gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800" });
+// --- Sidebar Navigation ---
 
-  container.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider font-semibold" }, "Mode"));
-
-  const btnBg = mode === "handoff-only" ? "#1e293b" : "#1e1b2e";
-  const sliderW = mode === "handoff-only" ? "105px" : "125px";
-  const sliderL = mode === "handoff-only" ? "2px" : "93px";
-  const sliderBg = mode === "handoff-only" ? "#2563eb" : "#7c3aed";
-
-  const btn = h("button", {
-    className: "relative flex items-center h-7 rounded-full transition-colors",
-    style: { width: "220px", background: btnBg },
-    onClick: () => {
-      state.viewMode = mode === "handoff-only" ? "handoff-plus-index" : "handoff-only";
-      render();
-    }
-  });
-
-  const slider = h("div", {
-    className: "absolute h-6 rounded-full transition-all duration-300 ease-out",
-    style: { width: sliderW, left: sliderL, background: sliderBg }
-  });
-  btn.appendChild(slider);
-
-  btn.appendChild(h("span", {
-    className: `relative z-10 text-xs font-medium px-3 transition-colors ${mode === "handoff-only" ? "text-white" : "text-zinc-500"}`
-  }, "Handoff Only"));
-
-  btn.appendChild(h("span", {
-    className: `relative z-10 text-xs font-medium px-3 transition-colors ${mode === "handoff-plus-index" ? "text-white" : "text-zinc-500"}`
-  }, "+ Knowledge Index"));
-
-  container.appendChild(btn);
-  return container;
-}
-
-function getViewMode() {
-  return state.viewMode || state.orchestrator.mode || "handoff-only";
-}
-
-function MetricsStrip() {
-  const m = computeMetrics();
-  const items = [
-    { label: "Iteration", value: m.iteration, accent: "text-blue-400" },
-    { label: "Tasks Done", value: `${m.tasksDone}/${m.tasksTotal}`, accent: "text-emerald-400" },
-    { label: "Validations", value: `${m.valPass}\u2713 ${m.valFail}\u2717`, accent: "text-zinc-300" },
-    { label: "Rollbacks", value: m.rollbacks, accent: m.rollbacks > 0 ? "text-red-400" : "text-zinc-500" },
-    { label: "Avg Duration", value: m.avgDuration > 0 ? `${m.avgDuration}s` : "\u2014", accent: "text-zinc-300" },
-    { label: "Files \u0394", value: m.totalFiles, accent: "text-zinc-300" },
-    { label: "Compactions", value: m.compactions, accent: "text-violet-400" },
-    { label: "Elapsed", value: m.elapsed > 0 ? `${m.elapsed}m` : "\u2014", accent: "text-zinc-300" },
+function SidebarNav() {
+  const views = [
+    { id: "run", icon: "run", label: "Run" },
+    { id: "log", icon: "log", label: "Log" },
+    { id: "insights", icon: "insights", label: "Insights" },
+    { id: "control", icon: "control", label: "Control" },
   ];
 
-  const grid = h("div", { className: "grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2" });
-  for (const item of items) {
-    grid.appendChild(h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg p-2 text-center" },
-      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider" }, item.label),
-      h("div", { className: `text-lg font-mono font-bold ${item.accent}` }, String(item.value))
-    ));
+  const sidebar = h("div", {
+    className: "fixed left-0 top-0 h-screen w-14 bg-zinc-900/90 border-r border-zinc-800 flex flex-col items-center py-3 z-50"
+  });
+
+  // Logo
+  sidebar.appendChild(h("div", {
+    className: "text-blue-400 font-bold text-lg mb-6 select-none",
+    title: "Ralph Deluxe"
+  }, "R"));
+
+  // Nav items
+  for (const view of views) {
+    const isActive = state.activeView === view.id;
+    const btn = h("button", {
+      className: `w-10 h-10 rounded-lg flex items-center justify-center mb-1 transition-colors relative ${
+        isActive
+          ? "bg-zinc-800 text-blue-400"
+          : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+      }`,
+      title: view.label,
+      onClick: () => { state.activeView = view.id; render(); }
+    });
+    if (isActive) {
+      btn.appendChild(h("div", {
+        className: "absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-blue-400 rounded-r"
+      }));
+    }
+    btn.appendChild(iconSvg(view.icon));
+    sidebar.appendChild(btn);
   }
-  return grid;
+
+  // Spacer
+  sidebar.appendChild(h("div", { className: "flex-1" }));
+
+  // Quick pause/resume
+  const paused = isPaused();
+  const status = state.orchestrator.status || "idle";
+  const isRunning = status === "running";
+
+  const pauseBtn = h("button", {
+    className: `w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+      paused
+        ? "text-amber-400 hover:bg-amber-900/30"
+        : isRunning
+          ? "text-emerald-400 hover:bg-emerald-900/30"
+          : "text-zinc-600"
+    }`,
+    title: paused ? "Resume" : "Pause",
+    onClick: () => postCommand({ command: paused ? "resume" : "pause" })
+  });
+  pauseBtn.appendChild(iconSvg(paused ? "resume" : "pause"));
+  sidebar.appendChild(pauseBtn);
+
+  // Status dot
+  const dotColor = isRunning ? "bg-emerald-400 pulse-dot" : paused ? "bg-amber-400" : "bg-zinc-600";
+  sidebar.appendChild(h("div", { className: `w-2 h-2 rounded-full ${dotColor} mb-3` }));
+
+  return sidebar;
 }
+
+// --- Header Bar ---
+
+function HeaderBar() {
+  const m = computeMetrics();
+  const status = state.orchestrator.status || "idle";
+
+  const header = h("div", {
+    className: "h-12 border-b border-zinc-800 bg-zinc-950/95 flex items-center justify-between px-5 sticky top-0 z-40"
+  });
+
+  // Left: logo + status
+  const left = h("div", { className: "flex items-center gap-3" });
+  left.appendChild(h("span", { className: "font-semibold tracking-tight" },
+    h("span", { className: "text-blue-400" }, "Ralph"),
+    h("span", { className: "text-zinc-500" }, " Deluxe")
+  ));
+  left.appendChild(StatusBadge(status));
+  header.appendChild(left);
+
+  // Right: compact metrics
+  const right = h("div", { className: "flex items-center gap-4 text-xs font-mono" });
+  right.appendChild(h("span", { className: "text-zinc-400" },
+    h("span", { className: "text-zinc-600" }, "Iter "),
+    h("span", { className: "text-blue-400 font-semibold" }, String(m.iteration))
+  ));
+  right.appendChild(h("span", { className: "text-zinc-700" }, "|"));
+  right.appendChild(h("span", { className: "text-zinc-400" },
+    h("span", { className: "text-emerald-400 font-semibold" }, `${m.tasksDone}/${m.tasksTotal}`),
+    h("span", { className: "text-zinc-600" }, " tasks")
+  ));
+  right.appendChild(h("span", { className: "text-zinc-700" }, "|"));
+  right.appendChild(h("span", { className: "text-zinc-400" },
+    h("span", { className: "text-emerald-400" }, `${m.valPass}\u2713`),
+    m.valFail > 0
+      ? h("span", { className: "text-red-400 ml-1" }, `${m.valFail}\u2717`)
+      : h("span", { className: "text-zinc-600 ml-1" }, `${m.valFail}\u2717`)
+  ));
+  if (m.elapsed > 0) {
+    right.appendChild(h("span", { className: "text-zinc-700" }, "|"));
+    right.appendChild(h("span", { className: "text-zinc-500" }, `${m.elapsed}m`));
+  }
+  header.appendChild(right);
+
+  return header;
+}
+
+// --- Task Plan ---
 
 function TaskPlan() {
   const tasks = state.plan.tasks || [];
   const currentTask = state.orchestrator.last_task_id;
   const doneTasks = tasks.filter(t => t.status === "done").length;
+  const totalTasks = tasks.length;
+  const pctDone = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+  const panel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl overflow-hidden" });
 
-  // Header
-  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Task Plan"));
-  header.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${doneTasks}/${tasks.length} complete`));
+  // Header with progress
+  const header = h("div", { className: "px-4 py-3 border-b border-zinc-800/50" });
+  const headerTop = h("div", { className: "flex items-center justify-between mb-2" });
+  headerTop.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Task Plan"));
+  headerTop.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${doneTasks}/${totalTasks}`));
+  header.appendChild(headerTop);
+
+  // Progress bar
+  const barOuter = h("div", { className: "w-full h-1 bg-zinc-800 rounded-full overflow-hidden" });
+  barOuter.appendChild(h("div", {
+    className: "h-full bg-emerald-500/80 rounded-full transition-all duration-500",
+    style: { width: pctDone + "%" }
+  }));
+  header.appendChild(barOuter);
   panel.appendChild(header);
 
   // Task list
-  const list = h("div", { className: "divide-y divide-zinc-800/50" });
+  const list = h("div", { className: "divide-y divide-zinc-800/30" });
   for (const task of tasks) {
     const isCurrent = task.id === currentTask;
     const row = h("div", {
-      className: `flex items-center gap-3 px-4 py-2 transition-colors ${
-        isCurrent ? "bg-blue-950/30 border-l-2 border-blue-500" : "border-l-2 border-transparent"
-      }`
+      className: `flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer ${
+        isCurrent ? "bg-blue-950/20 border-l-2 border-blue-500" : "border-l-2 border-transparent hover:bg-zinc-800/30"
+      }`,
+      onClick: () => {
+        // Find handoff matching this task
+        const idx = state.handoffs.findIndex(ho => {
+          const tid = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
+          return tid === task.id;
+        });
+        if (idx >= 0) {
+          state.selectedHandoff = idx;
+          render();
+        }
+      }
     });
-    row.appendChild(h("span", { className: "text-xs text-zinc-600 font-mono w-16" }, task.id));
+
+    // Status icon
+    if (task.status === "done") {
+      row.appendChild(h("span", { className: "text-emerald-500 text-xs w-4 text-center flex-shrink-0" }, "\u2713"));
+    } else if (task.status === "skipped") {
+      row.appendChild(h("span", { className: "text-zinc-600 text-xs w-4 text-center flex-shrink-0" }, "\u2013"));
+    } else if (isCurrent) {
+      row.appendChild(h("span", { className: "text-blue-400 text-xs w-4 text-center flex-shrink-0" }, "\u25CF"));
+    } else {
+      row.appendChild(h("span", { className: "text-zinc-700 text-xs w-4 text-center flex-shrink-0" }, "\u25CB"));
+    }
+
+    row.appendChild(h("span", { className: "text-xs text-zinc-600 font-mono w-16 flex-shrink-0" }, task.id));
     row.appendChild(h("span", {
       className: `flex-1 text-sm ${
-        task.status === "done" ? "text-zinc-500 line-through" :
-        task.status === "skipped" ? "text-zinc-600 line-through" :
+        task.status === "done" ? "text-zinc-500" :
+        task.status === "skipped" ? "text-zinc-600" :
         isCurrent ? "text-zinc-200" : "text-zinc-400"
       }`
     }, task.title));
     row.appendChild(StatusBadge(task.status));
+
     if (task.status === "pending") {
       const taskIdForSkip = task.id;
       row.appendChild(h("button", {
@@ -423,57 +525,124 @@ function TaskPlan() {
   return panel;
 }
 
+// --- Git Timeline ---
+
+function GitTimeline() {
+  const handoffs = state.handoffs;
+  const events = state.events;
+
+  const timelineData = [];
+  if (handoffs.length > 0) {
+    for (const ho of handoffs) {
+      const taskId = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
+      const valPassed = ho.validation_passed;
+      timelineData.push({ taskId, valPassed });
+    }
+  } else if (events.length > 0) {
+    const iterEvents = events.filter(e => e.event === "iteration_end" || e.event === "validation_pass" || e.event === "validation_fail");
+    for (const ev of iterEvents) {
+      timelineData.push({
+        taskId: ev.metadata ? ev.metadata.task_id : "",
+        valPassed: ev.event === "validation_pass" ? true : ev.event === "validation_fail" ? false : null
+      });
+    }
+  }
+
+  if (timelineData.length === 0) return h("div");
+
+  const container = h("div", { className: "px-4 py-3" });
+  container.appendChild(h("div", { className: "text-xs text-zinc-600 uppercase tracking-wider font-mono mb-2" }, "Timeline"));
+
+  const timeline = h("div", { className: "flex items-center gap-0.5 overflow-x-auto pb-1" });
+  timelineData.forEach((item, i) => {
+    const wrapper = h("div", { className: "flex items-center" });
+    let dotClass;
+    if (item.valPassed === null || item.valPassed === undefined) {
+      dotClass = "border-amber-500 bg-amber-500/20";
+    } else if (item.valPassed) {
+      dotClass = "border-emerald-500 bg-emerald-500/20";
+    } else {
+      dotClass = "border-red-500 bg-red-500/20";
+    }
+    const isSelected = i === state.selectedHandoff;
+    wrapper.appendChild(h("div", {
+      className: `${isSelected ? "w-3.5 h-3.5" : "w-3 h-3"} rounded-full border-2 flex-shrink-0 cursor-pointer transition-all ${dotClass} ${isSelected ? "ring-1 ring-blue-400/50" : ""}`,
+      title: `Iteration ${i + 1}: ${item.taskId}`,
+      onClick: () => { state.selectedHandoff = i; render(); }
+    }));
+    if (i < timelineData.length - 1) {
+      wrapper.appendChild(h("div", { className: "w-4 h-px bg-zinc-700/50 flex-shrink-0" }));
+    }
+    timeline.appendChild(wrapper);
+  });
+  container.appendChild(timeline);
+
+  return container;
+}
+
+// --- Handoff Viewer ---
+
 function HandoffViewer() {
   const handoffs = state.handoffs;
   const panel = h("div", {
-    className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden flex flex-col",
-    style: { minHeight: "400px" }
+    className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl overflow-hidden flex flex-col h-full"
   });
 
-  // Header with iteration selectors
-  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Handoff Documents"));
+  // Header with prev/next navigation
+  const header = h("div", { className: "px-5 py-3 border-b border-zinc-800/50 flex items-center justify-between flex-shrink-0" });
+  header.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Handoff"));
 
   if (handoffs.length === 0) {
     panel.appendChild(header);
-    panel.appendChild(h("div", { className: "flex-1 flex items-center justify-center p-4" },
-      h("div", { className: "text-xs text-zinc-600 italic" }, "No handoff documents yet. They appear after the first iteration completes.")
+    panel.appendChild(h("div", { className: "flex-1 flex items-center justify-center p-8" },
+      h("div", { className: "text-sm text-zinc-600" }, "No handoff documents yet. They appear after the first iteration completes.")
     ));
     return panel;
   }
 
-  const selector = h("div", { className: "flex gap-1 flex-wrap" });
-  handoffs.forEach((ho, i) => {
-    const iter = ho.task_completed ? ho.task_completed.task_id : (i + 1);
-    const isComplete = ho.task_completed ? ho.task_completed.fully_complete : false;
-    const valPassed = ho.validation_passed;
+  // Navigation: < Prev  [N / M]  Next >
+  const nav = h("div", { className: "flex items-center gap-2" });
 
-    let btnClass;
-    if (i === state.selectedHandoff) {
-      btnClass = "bg-blue-600 text-white";
-    } else if (valPassed === null || valPassed === undefined) {
-      btnClass = "bg-amber-900/40 text-amber-400 border border-amber-800/50";
-    } else if (isComplete) {
-      btnClass = "bg-zinc-800 text-zinc-400 hover:bg-zinc-700";
-    } else {
-      btnClass = "bg-zinc-800 text-zinc-500 hover:bg-zinc-700 border border-dashed border-zinc-700";
+  const prevBtn = h("button", {
+    className: `p-1 rounded transition-colors ${
+      state.selectedHandoff > 0
+        ? "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+        : "text-zinc-700 cursor-default"
+    }`,
+    onClick: () => {
+      if (state.selectedHandoff > 0) { state.selectedHandoff--; render(); }
     }
-
-    selector.appendChild(h("button", {
-      className: `w-7 h-7 rounded text-xs font-mono transition-colors ${btnClass}`,
-      onClick: () => { state.selectedHandoff = i; render(); }
-    }, String(i + 1)));
   });
-  header.appendChild(selector);
+  prevBtn.appendChild(iconSvg("chevronLeft"));
+  nav.appendChild(prevBtn);
+
+  nav.appendChild(h("span", { className: "text-xs font-mono text-zinc-400 min-w-[60px] text-center" },
+    `${state.selectedHandoff + 1} / ${handoffs.length}`
+  ));
+
+  const nextBtn = h("button", {
+    className: `p-1 rounded transition-colors ${
+      state.selectedHandoff < handoffs.length - 1
+        ? "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+        : "text-zinc-700 cursor-default"
+    }`,
+    onClick: () => {
+      if (state.selectedHandoff < handoffs.length - 1) { state.selectedHandoff++; render(); }
+    }
+  });
+  nextBtn.appendChild(iconSvg("chevronRight"));
+  nav.appendChild(nextBtn);
+
+  header.appendChild(nav);
   panel.appendChild(header);
 
   // Selected handoff content
   const ho = handoffs[state.selectedHandoff];
   if (!ho) return panel;
 
-  const content = h("div", { className: "flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin" });
+  const content = h("div", { className: "flex-1 overflow-y-auto p-5 space-y-4 scrollbar-thin" });
 
-  // Normalize handoff shape (schema uses task_completed.{task_id, summary, fully_complete})
+  // Normalize
   const taskId = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
   const summary = ho.summary || (ho.task_completed ? ho.task_completed.summary : "");
   const freeform = ho.freeform || "";
@@ -484,163 +653,268 @@ function HandoffViewer() {
   const constraints = ho.constraints_discovered || ho.constraints || [];
   const archNotes = ho.architectural_notes || [];
   const timestamp = ho.timestamp || "";
-
-  // Determine file count
   const fileCount = Array.isArray(filesTouched) ? filesTouched.length : (typeof filesTouched === "number" ? filesTouched : 0);
 
-  // Header line
-  const hdrRow = h("div", { className: "flex items-center gap-3 flex-wrap" });
-  hdrRow.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, taskId));
+  // Meta line
+  const meta = h("div", { className: "flex items-center gap-2 flex-wrap" });
+  meta.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, taskId));
   if (timestamp) {
-    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u2022"));
-    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-500" },
+    meta.appendChild(h("span", { className: "text-zinc-700" }, "\u00B7"));
+    meta.appendChild(h("span", { className: "text-xs text-zinc-500" },
       timestamp.includes("T") ? new Date(timestamp).toLocaleTimeString() : timestamp
     ));
   }
-  hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u2022"));
+  meta.appendChild(h("span", { className: "text-zinc-700" }, "\u00B7"));
   const badgeStatus = valPassed === null || valPassed === undefined
     ? "running" : isComplete ? "done" : "in_progress";
-  hdrRow.appendChild(StatusBadge(badgeStatus));
+  meta.appendChild(StatusBadge(badgeStatus));
   if (fileCount > 0) {
-    hdrRow.appendChild(h("span", { className: "text-xs text-zinc-600" }, `${fileCount} files`));
+    meta.appendChild(h("span", { className: "text-zinc-700" }, "\u00B7"));
+    meta.appendChild(h("span", { className: "text-xs text-zinc-500" }, `${fileCount} files`));
   }
-  content.appendChild(hdrRow);
+  content.appendChild(meta);
 
   // Summary
   if (summary) {
-    content.appendChild(h("div", {},
-      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Summary"),
-      h("div", { className: "text-sm text-zinc-300" }, summary)
-    ));
+    content.appendChild(h("div", { className: "text-sm text-zinc-200 leading-relaxed" }, summary));
   }
 
-  // Freeform notes
+  // Freeform (hero content)
   if (freeform) {
-    const freeformBox = h("div", { className: "bg-zinc-950/60 border border-zinc-800/80 rounded-lg p-3" });
-    freeformBox.appendChild(h("div", { className: "text-xs text-blue-400 uppercase tracking-wider mb-2 flex items-center gap-1.5" },
+    const freeformBox = h("div", { className: "bg-zinc-950/40 border border-zinc-800/40 rounded-lg p-4" });
+    freeformBox.appendChild(h("div", { className: "text-xs text-blue-400/80 uppercase tracking-wider mb-3 flex items-center gap-1.5 font-mono" },
       h("span", {}, "\u25C6"), " Handoff Notes"
     ));
     freeformBox.appendChild(h("div", {
-      className: "text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed font-mono",
-      style: { fontSize: "12.5px" }
+      className: "text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed"
     }, freeform));
     content.appendChild(freeformBox);
   }
 
+  // Collapsible structured sections
+  function collapsibleSection(title, colorClass, items, renderFn) {
+    if (!items || items.length === 0) return null;
+    const details = document.createElement("details");
+    details.className = "border border-zinc-800/30 rounded-lg overflow-hidden";
+    const summaryEl = document.createElement("summary");
+    summaryEl.className = "px-4 py-2 flex items-center justify-between hover:bg-zinc-800/20 transition-colors";
+    summaryEl.appendChild(h("span", { className: `text-xs ${colorClass} uppercase tracking-wider font-mono` },
+      `${title} (${items.length})`
+    ));
+    summaryEl.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u25B8"));
+    details.appendChild(summaryEl);
+    const body = h("div", { className: "px-4 pb-3 pt-1 space-y-1" });
+    renderFn(body, items);
+    details.appendChild(body);
+    return details;
+  }
+
   // Deviations
-  if (deviations.length > 0) {
-    const devSection = h("div", {});
-    devSection.appendChild(h("div", { className: "text-xs text-amber-500 uppercase tracking-wider mb-1" }, "Deviations"));
-    for (const d of deviations) {
-      devSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+  const devSection = collapsibleSection("Deviations", "text-amber-400", deviations, (body, items) => {
+    for (const d of items) {
+      body.appendChild(h("div", { className: "text-xs text-zinc-400" },
         h("span", { className: "text-zinc-500" }, d.planned),
         h("span", { className: "text-zinc-600" }, " \u2192 "),
         h("span", { className: "text-zinc-300" }, d.actual),
-        h("span", { className: "text-zinc-600" }, " \u2014 "),
-        h("span", { className: "text-zinc-500 italic" }, d.reason)
+        d.reason ? [h("span", { className: "text-zinc-700" }, " \u2014 "), h("span", { className: "text-zinc-500" }, d.reason)] : null
       ));
     }
-    content.appendChild(devSection);
-  }
+  });
+  if (devSection) content.appendChild(devSection);
 
   // Constraints
-  if (constraints.length > 0) {
-    const conSection = h("div", {});
-    conSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Constraints Discovered"));
-    for (const c of constraints) {
-      conSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+  const conSection = collapsibleSection("Constraints", "text-red-400", constraints, (body, items) => {
+    for (const c of items) {
+      body.appendChild(h("div", { className: "text-xs text-zinc-400" },
         h("span", { className: "text-zinc-300" }, c.constraint),
-        h("span", { className: "text-zinc-600" }, " \u2014 "),
-        h("span", { className: "text-zinc-500" }, c.impact)
+        c.impact ? [h("span", { className: "text-zinc-700" }, " \u2014 "), h("span", { className: "text-zinc-500" }, c.impact)] : null
       ));
     }
-    content.appendChild(conSection);
-  }
+  });
+  if (conSection) content.appendChild(conSection);
 
-  // Architectural notes
-  if (archNotes.length > 0) {
-    const archSection = h("div", {});
-    archSection.appendChild(h("div", { className: "text-xs text-emerald-500 uppercase tracking-wider mb-1" }, "Architecture"));
-    for (const note of archNotes) {
-      archSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" }, "\u2022 " + note));
+  // Architecture
+  const archSection = collapsibleSection("Architecture", "text-emerald-400", archNotes, (body, items) => {
+    for (const note of items) {
+      body.appendChild(h("div", { className: "text-xs text-zinc-400" }, "\u2022 " + note));
     }
-    content.appendChild(archSection);
-  }
+  });
+  if (archSection) content.appendChild(archSection);
 
-  // Files touched (expanded view)
+  // Files touched
   if (Array.isArray(filesTouched) && filesTouched.length > 0 && typeof filesTouched[0] === "object") {
-    const filesSection = h("div", {});
-    filesSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Files Touched"));
-    for (const f of filesTouched) {
-      const actionColor = f.action === "created" ? "text-emerald-500" :
-                           f.action === "deleted" ? "text-red-500" : "text-blue-400";
-      filesSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
-        h("span", { className: `${actionColor} mr-2` }, f.action),
-        h("span", { className: "text-zinc-500 font-mono" }, f.path)
-      ));
-    }
-    content.appendChild(filesSection);
+    const filesSection = collapsibleSection("Files Touched", "text-zinc-400", filesTouched, (body, items) => {
+      for (const f of items) {
+        const actionColor = f.action === "created" ? "text-emerald-400" :
+                             f.action === "deleted" ? "text-red-400" : "text-blue-400";
+        body.appendChild(h("div", { className: "text-xs text-zinc-400" },
+          h("span", { className: `${actionColor} mr-2` }, f.action),
+          h("span", { className: "text-zinc-500 font-mono" }, f.path)
+        ));
+      }
+    });
+    if (filesSection) content.appendChild(filesSection);
   }
 
   panel.appendChild(content);
   return panel;
 }
 
-function KnowledgeIndex() {
-  const mode = getViewMode();
+// --- Event Log (full-width for Log view) ---
 
-  if (mode === "handoff-only") {
-    return h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg p-4" },
-      h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-2" }, "Knowledge Index"),
-      h("div", { className: "text-xs text-zinc-600 italic" },
-        "Disabled in handoff-only mode. Switch to handoff + knowledge index to enable periodic compaction passes that organize accumulated insights into a searchable index."
+function EventLog() {
+  const events = state.events;
+  const filter = state.eventLogFilter;
+
+  const panel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl overflow-hidden" });
+
+  // Header with filter
+  const header = h("div", { className: "px-5 py-3 border-b border-zinc-800/50 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Event Log"));
+
+  const headerRight = h("div", { className: "flex items-center gap-3" });
+  headerRight.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${events.length} events`));
+
+  // Filter tabs
+  const filterBar = h("div", { className: "flex rounded-lg overflow-hidden border border-zinc-800" });
+  const filters = [
+    { id: "all", label: "All" },
+    { id: "iterations", label: "Iterations" },
+    { id: "validations", label: "Validations" },
+    { id: "notes", label: "Notes" },
+    { id: "errors", label: "Errors" },
+  ];
+  for (const f of filters) {
+    filterBar.appendChild(h("button", {
+      className: `px-2.5 py-1 text-xs transition-colors ${
+        filter === f.id ? "bg-zinc-800 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
+      }`,
+      onClick: () => { state.eventLogFilter = f.id; render(); }
+    }, f.label));
+  }
+  headerRight.appendChild(filterBar);
+  header.appendChild(headerRight);
+  panel.appendChild(header);
+
+  if (events.length === 0) {
+    panel.appendChild(h("div", { className: "p-5 text-sm text-zinc-600" },
+      "No events yet. Events appear when the orchestrator starts running."
+    ));
+    return panel;
+  }
+
+  // Filter events
+  let filtered = events;
+  if (filter === "iterations") {
+    filtered = events.filter(e => e.event === "iteration_start" || e.event === "iteration_end");
+  } else if (filter === "validations") {
+    filtered = events.filter(e => e.event === "validation_pass" || e.event === "validation_fail");
+  } else if (filter === "notes") {
+    filtered = events.filter(e => e.event === "note");
+  } else if (filter === "errors") {
+    filtered = events.filter(e => e.event === "validation_fail" || e.event === "stuck_detected" || e.event === "failure_pattern");
+  }
+
+  const eventColors = {
+    orchestrator_start: "text-blue-400",
+    orchestrator_end: "text-blue-400",
+    iteration_start: "text-zinc-400",
+    iteration_end: "text-zinc-400",
+    validation_pass: "text-emerald-400",
+    validation_fail: "text-red-400",
+    pause: "text-amber-400",
+    resume: "text-amber-400",
+    note: "text-blue-300",
+    stuck_detected: "text-red-400",
+    failure_pattern: "text-red-400",
+    human_review_requested: "text-amber-400",
+    agent_pass: "text-zinc-400",
+    skip_task: "text-zinc-500",
+  };
+
+  // Table header
+  const tableWrap = h("div", { className: "overflow-x-auto" });
+  const table = h("table", { className: "w-full text-xs" });
+  const thead = h("thead", {});
+  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800 font-mono" });
+  headerRow.appendChild(h("th", { className: "px-5 py-2 text-left font-medium w-20" }, "Time"));
+  headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium w-40" }, "Event"));
+  headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium" }, "Message"));
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = h("tbody", { className: "divide-y divide-zinc-800/30" });
+  const recentEvents = filtered.slice(-100).reverse();
+  for (const ev of recentEvents) {
+    const ts = ev.timestamp ? ev.timestamp.replace("T", " ").replace("Z", "") : "";
+    const shortTs = ts.length > 19 ? ts.slice(11, 19) : ts;
+    const color = eventColors[ev.event] || "text-zinc-500";
+
+    const row = h("tr", { className: "hover:bg-zinc-800/20 transition-colors" });
+    row.appendChild(h("td", { className: "px-5 py-1.5 text-zinc-600 font-mono" }, shortTs));
+    row.appendChild(h("td", { className: `px-3 py-1.5 font-mono ${color}` }, ev.event));
+    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, ev.message || ""));
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  panel.appendChild(tableWrap);
+
+  return panel;
+}
+
+// --- Knowledge Index ---
+
+function KnowledgeIndex() {
+  const mode = state.orchestrator.mode || "handoff-only";
+  const index = state.knowledgeIndex;
+
+  if (mode === "handoff-only" && index.length === 0) {
+    return h("div", { className: "p-6" },
+      h("div", { className: "text-sm text-zinc-500" },
+        "Knowledge index is available in handoff-plus-index and agent-orchestrated modes. Switch modes in the Control view to enable periodic compaction passes."
       )
     );
   }
 
-  const index = state.knowledgeIndex;
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+  const panel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl overflow-hidden" });
 
-  // Header
-  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Knowledge Index"));
+  const header = h("div", { className: "px-5 py-3 border-b border-zinc-800/50 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Knowledge Index"));
   const lastIter = index.length > 0 ? index[index.length - 1].iteration : 0;
-  header.appendChild(h("span", { className: "text-xs text-violet-400 font-mono" },
+  header.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" },
     lastIter > 0 ? `Last organized: iter ${lastIter}` : "No entries yet"
   ));
   panel.appendChild(header);
 
   if (index.length === 0) {
-    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+    panel.appendChild(h("div", { className: "p-5 text-sm text-zinc-600" },
       "No knowledge index entries yet. They appear after the first compaction pass."
     ));
     return panel;
   }
 
-  // Table
   const tableWrap = h("div", { className: "overflow-x-auto" });
   const table = h("table", { className: "w-full text-xs" });
-
   const thead = h("thead", {});
-  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800" });
+  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800 font-mono" });
   for (const col of ["Iter", "Task", "Summary", "Tags"]) {
-    headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium" }, col));
+    headerRow.appendChild(h("th", { className: "px-5 py-2 text-left font-medium" }, col));
   }
   thead.appendChild(headerRow);
   table.appendChild(thead);
 
-  const tbody = h("tbody", { className: "divide-y divide-zinc-800/50" });
+  const tbody = h("tbody", { className: "divide-y divide-zinc-800/30" });
   for (const entry of index) {
-    const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
-    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, String(entry.iteration)));
-    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, entry.task));
-    row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry.summary));
-
-    const tagCell = h("td", { className: "px-3 py-1.5" });
+    const row = h("tr", { className: "hover:bg-zinc-800/20 transition-colors" });
+    row.appendChild(h("td", { className: "px-5 py-2 text-zinc-500 font-mono" }, String(entry.iteration)));
+    row.appendChild(h("td", { className: "px-5 py-2 text-zinc-500 font-mono" }, entry.task));
+    row.appendChild(h("td", { className: "px-5 py-2 text-zinc-400 text-sm" }, entry.summary));
+    const tagCell = h("td", { className: "px-5 py-2" });
     const tagWrap = h("div", { className: "flex gap-1 flex-wrap" });
     for (const tag of (entry.tags || [])) {
       tagWrap.appendChild(h("span", {
-        className: "px-1.5 py-0.5 rounded bg-violet-950/50 text-violet-400 border border-violet-800/30 text-xs"
+        className: "px-1.5 py-0.5 rounded bg-zinc-800/60 text-zinc-400 border border-zinc-700/30 text-xs font-mono"
       }, tag));
     }
     tagCell.appendChild(tagWrap);
@@ -651,32 +925,25 @@ function KnowledgeIndex() {
   tableWrap.appendChild(table);
   panel.appendChild(tableWrap);
 
-  panel.appendChild(h("div", { className: "px-4 py-2 border-t border-zinc-800 text-xs text-zinc-600" },
-    "The coding agent receives this index as a header. It can ",
-    h("code", { className: "text-zinc-400" }, "grep"),
-    " or read specific ",
-    h("code", { className: "text-zinc-400" }, "handoff-NNN.json"),
-    " files for details."
-  ));
-
   return panel;
 }
+
+// --- Progress Log ---
 
 function ProgressLog() {
   const log = state.progressLog || { plan_summary: {}, entries: [] };
   const summary = log.plan_summary || {};
   const entries = log.entries || [];
 
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
+  const panel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl overflow-hidden" });
 
-  // Header with tab toggle
-  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Progress Log"));
+  const header = h("div", { className: "px-5 py-3 border-b border-zinc-800/50 flex items-center justify-between" });
+  header.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Progress Log"));
 
   const tabBar = h("div", { className: "flex rounded-lg overflow-hidden border border-zinc-800" });
   for (const tab of ["summary", "detail"]) {
     tabBar.appendChild(h("button", {
-      className: `px-3 py-1 text-xs uppercase tracking-wider transition-colors ${
+      className: `px-3 py-1 text-xs transition-colors ${
         progressActiveTab === tab ? "bg-zinc-800 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
       }`,
       onClick: () => { progressActiveTab = tab; render(); }
@@ -685,9 +952,8 @@ function ProgressLog() {
   header.appendChild(tabBar);
   panel.appendChild(header);
 
-  // Empty state
   if (entries.length === 0) {
-    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
+    panel.appendChild(h("div", { className: "p-5 text-sm text-zinc-600" },
       "No progress entries yet. They appear after the first successful iteration."
     ));
     return panel;
@@ -703,9 +969,8 @@ function ProgressLog() {
 }
 
 function ProgressSummaryView(summary, entries) {
-  const container = h("div", { className: "p-4 space-y-4" });
+  const container = h("div", { className: "p-5 space-y-4" });
 
-  // Compact status bar from plan_summary
   const total = summary.total_tasks || 0;
   const completed = summary.completed || 0;
   const failed = summary.failed || 0;
@@ -714,73 +979,58 @@ function ProgressSummaryView(summary, entries) {
 
   const statusBar = h("div", { className: "flex items-center gap-3 flex-wrap" });
   if (total > 0) {
-    statusBar.appendChild(h("span", { className: "text-sm font-mono text-emerald-400 font-bold" },
+    statusBar.appendChild(h("span", { className: "text-sm font-mono text-emerald-400 font-semibold" },
       `${completed}/${total} tasks done`
     ));
-    if (failed > 0) {
-      statusBar.appendChild(h("span", { className: "text-xs text-red-400 font-mono" }, `${failed} failed`));
-    }
-    if (skipped > 0) {
-      statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${skipped} skipped`));
-    }
-    if (pending > 0) {
-      statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${pending} pending`));
-    }
+    if (failed > 0) statusBar.appendChild(h("span", { className: "text-xs text-red-400 font-mono" }, `${failed} failed`));
+    if (skipped > 0) statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${skipped} skipped`));
+    if (pending > 0) statusBar.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${pending} pending`));
   }
   container.appendChild(statusBar);
 
-  // Progress bar
   if (total > 0) {
     const pctDone = Math.round((completed / total) * 100);
-    const barOuter = h("div", { className: "w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden" });
+    const barOuter = h("div", { className: "w-full h-1 bg-zinc-800 rounded-full overflow-hidden" });
     barOuter.appendChild(h("div", {
-      className: "h-full bg-emerald-500 rounded-full transition-all",
+      className: "h-full bg-emerald-500/80 rounded-full transition-all",
       style: { width: pctDone + "%" }
     }));
     container.appendChild(barOuter);
   }
 
-  // Task table with summary text from entries
   const tableWrap = h("div", { className: "overflow-x-auto" });
   const table = h("table", { className: "w-full text-xs" });
-
   const thead = h("thead", {});
-  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800" });
+  const headerRow = h("tr", { className: "text-zinc-500 uppercase tracking-wider border-b border-zinc-800 font-mono" });
   for (const col of ["Task", "Status", "Summary"]) {
     headerRow.appendChild(h("th", { className: "px-3 py-2 text-left font-medium" }, col));
   }
   thead.appendChild(headerRow);
   table.appendChild(thead);
 
-  const tbody = h("tbody", { className: "divide-y divide-zinc-800/50" });
-
-  // Build a map from task_id to latest entry summary
+  const tbody = h("tbody", { className: "divide-y divide-zinc-800/30" });
   const entryMap = {};
-  for (const entry of entries) {
-    entryMap[entry.task_id] = entry;
-  }
+  for (const entry of entries) { entryMap[entry.task_id] = entry; }
 
-  // Use plan tasks if available, otherwise fall back to entries
   const tasks = (state.plan.tasks || []);
   if (tasks.length > 0) {
     for (const task of tasks) {
       const entry = entryMap[task.id];
-      const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
+      const row = h("tr", { className: "hover:bg-zinc-800/20 transition-colors" });
       row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, task.id));
       row.appendChild(h("td", { className: "px-3 py-1.5" }, StatusBadge(task.status)));
-      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry ? entry.summary : "\u2014"));
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400 text-sm" }, entry ? entry.summary : "\u2014"));
       tbody.appendChild(row);
     }
   } else {
     for (const entry of entries) {
-      const row = h("tr", { className: "hover:bg-zinc-800/30 transition-colors" });
+      const row = h("tr", { className: "hover:bg-zinc-800/20 transition-colors" });
       row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-500 font-mono" }, entry.task_id));
       row.appendChild(h("td", { className: "px-3 py-1.5" }, StatusBadge(entry.fully_complete ? "done" : "in_progress")));
-      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400" }, entry.summary || "\u2014"));
+      row.appendChild(h("td", { className: "px-3 py-1.5 text-zinc-400 text-sm" }, entry.summary || "\u2014"));
       tbody.appendChild(row);
     }
   }
-
   table.appendChild(tbody);
   tableWrap.appendChild(table);
   container.appendChild(tableWrap);
@@ -788,24 +1038,20 @@ function ProgressSummaryView(summary, entries) {
 }
 
 function ProgressDetailView(entries) {
-  const container = h("div", { className: "divide-y divide-zinc-800/50" });
-
+  const container = h("div", { className: "divide-y divide-zinc-800/30" });
   for (const entry of entries) {
     const taskId = entry.task_id || "";
     const isExpanded = progressExpandState[taskId] || false;
     const isComplete = entry.fully_complete;
     const hasBugs = (entry.bugs || []).some(b => !b.resolved);
 
-    // Color-coded left border
     let borderColor = "border-emerald-500";
     if (hasBugs) borderColor = "border-red-500";
-    else if (!isComplete) borderColor = "border-amber-500";
+    else if (!isComplete) borderColor = "border-blue-500";
 
     const entryEl = h("div", { className: `border-l-2 ${borderColor}` });
-
-    // Clickable header row
     const headerRow = h("div", {
-      className: "px-4 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-zinc-800/30 transition-colors",
+      className: "px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-zinc-800/20 transition-colors",
       onClick: () => { progressExpandState[taskId] = !isExpanded; render(); }
     });
 
@@ -816,51 +1062,42 @@ function ProgressDetailView(entries) {
     if (entry.iteration) {
       headerRow.appendChild(h("span", { className: "text-xs text-zinc-600 font-mono" }, `iter ${entry.iteration}`));
     }
-
     entryEl.appendChild(headerRow);
 
-    // Expanded detail content
     if (isExpanded) {
-      const detail = h("div", { className: "px-4 pb-4 space-y-3 ml-4" });
+      const detail = h("div", { className: "px-5 pb-4 space-y-3 ml-4" });
 
-      // Summary
       if (entry.summary) {
         detail.appendChild(h("div", {},
-          h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Summary"),
+          h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1 font-mono" }, "Summary"),
           h("div", { className: "text-sm text-zinc-300" }, entry.summary)
         ));
       }
 
-      // Files changed table
       const files = entry.files_changed || [];
       if (files.length > 0) {
         const filesSection = h("div", {});
-        filesSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" },
+        filesSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1 font-mono" },
           `Files Changed (${files.length})`
         ));
-        const ftable = h("table", { className: "w-full text-xs" });
-        const ftbody = h("tbody", { className: "divide-y divide-zinc-800/30" });
         for (const f of files) {
-          const actionColor = f.action === "created" ? "text-emerald-500" :
-                              f.action === "deleted" ? "text-red-500" : "text-blue-400";
-          const frow = h("tr", {});
-          frow.appendChild(h("td", { className: "py-0.5 pr-3 text-zinc-500 font-mono" }, f.path));
-          frow.appendChild(h("td", { className: `py-0.5 ${actionColor}` }, f.action));
-          ftbody.appendChild(frow);
+          const actionColor = f.action === "created" ? "text-emerald-400" :
+                              f.action === "deleted" ? "text-red-400" : "text-blue-400";
+          filesSection.appendChild(h("div", { className: "text-xs text-zinc-400" },
+            h("span", { className: `${actionColor} mr-2 font-mono` }, f.action),
+            h("span", { className: "text-zinc-500 font-mono" }, f.path)
+          ));
         }
-        ftable.appendChild(ftbody);
-        filesSection.appendChild(ftable);
         detail.appendChild(filesSection);
       }
 
-      // Tests added
       const tests = entry.tests_added || [];
       if (tests.length > 0) {
         const testsSection = h("div", {});
-        testsSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1" }, "Tests Added"));
+        testsSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider mb-1 font-mono" }, "Tests Added"));
         for (const t of tests) {
           const testNames = (t.test_names || []).join(", ");
-          testsSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+          testsSection.appendChild(h("div", { className: "text-xs text-zinc-400" },
             h("span", { className: "text-zinc-500 font-mono" }, t.file),
             testNames ? h("span", { className: "text-zinc-600" }, ": " + testNames) : null
           ));
@@ -868,58 +1105,54 @@ function ProgressDetailView(entries) {
         detail.appendChild(testsSection);
       }
 
-      // Design decisions
       const decisions = entry.design_decisions || [];
       if (decisions.length > 0) {
         const decSection = h("div", {});
-        decSection.appendChild(h("div", { className: "text-xs text-emerald-500 uppercase tracking-wider mb-1" }, "Design Decisions"));
+        decSection.appendChild(h("div", { className: "text-xs text-emerald-400 uppercase tracking-wider mb-1 font-mono" }, "Design Decisions"));
         for (const d of decisions) {
-          decSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" }, "\u2022 " + d));
+          decSection.appendChild(h("div", { className: "text-xs text-zinc-400" }, "\u2022 " + d));
         }
         detail.appendChild(decSection);
       }
 
-      // Constraints
-      const constraints = entry.constraints || [];
-      if (constraints.length > 0) {
+      const cns = entry.constraints || [];
+      if (cns.length > 0) {
         const conSection = h("div", {});
-        conSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Constraints"));
-        for (const c of constraints) {
-          conSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
+        conSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1 font-mono" }, "Constraints"));
+        for (const c of cns) {
+          conSection.appendChild(h("div", { className: "text-xs text-zinc-400" },
             h("span", { className: "text-zinc-300" }, c.constraint),
-            h("span", { className: "text-zinc-600" }, " \u2014 "),
+            h("span", { className: "text-zinc-700" }, " \u2014 "),
             h("span", { className: "text-zinc-500" }, c.impact)
           ));
         }
         detail.appendChild(conSection);
       }
 
-      // Deviations
-      const deviations = entry.deviations || [];
-      if (deviations.length > 0) {
+      const devs = entry.deviations || [];
+      if (devs.length > 0) {
         const devSection = h("div", {});
-        devSection.appendChild(h("div", { className: "text-xs text-amber-500 uppercase tracking-wider mb-1" }, "Deviations"));
-        for (const d of deviations) {
-          devSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-1" },
+        devSection.appendChild(h("div", { className: "text-xs text-amber-400 uppercase tracking-wider mb-1 font-mono" }, "Deviations"));
+        for (const d of devs) {
+          devSection.appendChild(h("div", { className: "text-xs text-zinc-400" },
             h("span", { className: "text-zinc-500" }, d.planned),
             h("span", { className: "text-zinc-600" }, " \u2192 "),
             h("span", { className: "text-zinc-300" }, d.actual),
-            h("span", { className: "text-zinc-600" }, " \u2014 "),
-            h("span", { className: "text-zinc-500 italic" }, d.reason)
+            h("span", { className: "text-zinc-700" }, " \u2014 "),
+            h("span", { className: "text-zinc-500" }, d.reason)
           ));
         }
         detail.appendChild(devSection);
       }
 
-      // Bugs
       const bugs = entry.bugs || [];
       if (bugs.length > 0) {
         const bugSection = h("div", {});
-        bugSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1" }, "Bugs"));
+        bugSection.appendChild(h("div", { className: "text-xs text-red-400 uppercase tracking-wider mb-1 font-mono" }, "Bugs"));
         for (const b of bugs) {
           const resolved = b.resolved;
-          bugSection.appendChild(h("div", { className: "text-xs text-zinc-400 mb-0.5" },
-            h("span", { className: resolved ? "text-emerald-500" : "text-red-400" }, resolved ? "\u2713 " : "\u2717 "),
+          bugSection.appendChild(h("div", { className: "text-xs text-zinc-400" },
+            h("span", { className: resolved ? "text-emerald-400" : "text-red-400" }, resolved ? "\u2713 " : "\u2717 "),
             h("span", { className: "text-zinc-300" }, b.description),
             b.resolution ? h("span", { className: "text-zinc-600" }, " \u2014 " + b.resolution) : null
           ));
@@ -929,271 +1162,60 @@ function ProgressDetailView(entries) {
 
       entryEl.appendChild(detail);
     }
-
     container.appendChild(entryEl);
   }
-
   return container;
 }
 
-function GitTimeline() {
-  const handoffs = state.handoffs;
-  const events = state.events;
-
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
-  panel.appendChild(h("div", { className: "px-4 py-2.5 border-b border-zinc-800" },
-    h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Git Timeline")
-  ));
-
-  // Build timeline from handoffs or events
-  const timelineData = [];
-  if (handoffs.length > 0) {
-    for (const ho of handoffs) {
-      const taskId = ho.task_completed ? ho.task_completed.task_id : (ho.task_id || "");
-      const valPassed = ho.validation_passed;
-      timelineData.push({ taskId, valPassed });
-    }
-  } else if (events.length > 0) {
-    // Fallback: build from iteration events
-    const iterEvents = events.filter(e => e.event === "iteration_end" || e.event === "validation_pass" || e.event === "validation_fail");
-    for (const ev of iterEvents) {
-      timelineData.push({
-        taskId: ev.metadata ? ev.metadata.task_id : "",
-        valPassed: ev.event === "validation_pass" ? true : ev.event === "validation_fail" ? false : null
-      });
-    }
-  }
-
-  if (timelineData.length === 0) {
-    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
-      "No iterations yet."
-    ));
-    return panel;
-  }
-
-  const body = h("div", { className: "p-4" });
-  const timeline = h("div", { className: "flex items-center gap-0.5 overflow-x-auto pb-2" });
-
-  timelineData.forEach((item, i) => {
-    const wrapper = h("div", { className: "flex items-center" });
-
-    let dotClass;
-    if (item.valPassed === null || item.valPassed === undefined) {
-      dotClass = "border-amber-500 bg-amber-500/20";
-    } else if (item.valPassed) {
-      dotClass = "border-emerald-500 bg-emerald-500/20";
-    } else {
-      dotClass = "border-red-500 bg-red-500/20";
-    }
-
-    wrapper.appendChild(h("div", {
-      className: `w-4 h-4 rounded-full border-2 flex-shrink-0 ${dotClass}`,
-      title: `Iteration ${i + 1}: ${item.taskId}`
-    }));
-
-    if (i < timelineData.length - 1) {
-      wrapper.appendChild(h("div", { className: "w-6 h-0.5 bg-zinc-700 flex-shrink-0" }));
-    }
-
-    timeline.appendChild(wrapper);
-  });
-
-  body.appendChild(timeline);
-  body.appendChild(h("div", { className: "flex justify-between text-xs text-zinc-600 mt-1 font-mono" },
-    h("span", {}, "iter 1"),
-    h("span", {}, `iter ${timelineData.length}`)
-  ));
-
-  panel.appendChild(body);
-  return panel;
-}
-
-function ArchDiagram() {
-  const mode = getViewMode();
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
-  panel.appendChild(h("div", { className: "px-4 py-2.5 border-b border-zinc-800" },
-    h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" },
-      `Architecture \u2014 ${mode === "handoff-only" ? "Handoff Only" : "Handoff + Knowledge Index"}`
-    )
-  ));
-
-  const handoffOnlyDiagram = `
-  ┌─────────────────────────────────────────────┐
-  │               ralph.sh loop                 │
-  │                                             │
-  │  1. Read plan.json → next pending task      │
-  │  2. Assemble prompt:                        │
-  │     • task description                      │
-  │     • previous handoff (verbatim)           │
-  │     • skill files                           │
-  │  3. Create git checkpoint                   │
-  │  4. claude -p → coding iteration            │
-  │  5. Parse handoff from structured output    │
-  │  6. Run validation                          │
-  │  7. Pass → commit │ Fail → rollback         │
-  │  8. Save handoff → handoffs/NNN.json        │
-  │  9. Loop                                    │
-  │                                             │
-  │  Three artifacts:                           │
-  │  ┌──────┐  ┌─────────┐  ┌─────────────┐    │
-  │  │ Plan │→ │ Handoff  │→ │ Next prompt │    │
-  │  └──────┘  └─────────┘  └─────────────┘    │
-  └─────────────────────────────────────────────┘`;
-
-  const indexDiagram = `
-  ┌─────────────────────────────────────────────┐
-  │               ralph.sh loop                 │
-  │                                             │
-  │  CODING ITERATION (most loops):             │
-  │  1. Read plan.json → next pending task      │
-  │  2. Assemble prompt:                        │
-  │     • task description                      │
-  │     • previous handoff (verbatim)           │
-  │     • knowledge index header (lightweight)  │
-  │     • skill files                           │
-  │  3. Checkpoint → claude -p → validate       │
-  │  4. Commit/rollback → save handoff          │
-  │                                             │
-  │  COMPACTION ITERATION (every N loops):      │
-  │  1. Read all handoffs since last compaction  │
-  │  2. claude -p → organize into index         │
-  │  3. Output: index entries + tagged summaries │
-  │  4. Agent does NOT inject — just indexes     │
-  │                                             │
-  │  Three artifacts + index:                   │
-  │  ┌──────┐  ┌─────────┐  ┌───────┐          │
-  │  │ Plan │  │ Handoff  │  │ Index │          │
-  │  └──┬───┘  └────┬────┘  └───┬───┘          │
-  │     └─────┬─────┘           │               │
-  │     ┌─────▼─────┐    ┌─────▼─────┐         │
-  │     │Next prompt │    │ grep/read │         │
-  │     │(plan+hand) │    │ on demand │         │
-  │     └───────────┘    └───────────┘         │
-  └─────────────────────────────────────────────┘`;
-
-  panel.appendChild(h("div", { className: "p-4 font-mono text-xs leading-relaxed" },
-    h("pre", { className: "text-zinc-400 overflow-x-auto" },
-      mode === "handoff-only" ? handoffOnlyDiagram : indexDiagram
-    )
-  ));
-
-  return panel;
-}
-
-function EventLog() {
-  const events = state.events;
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
-
-  const header = h("div", { className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between" });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Event Log"));
-  header.appendChild(h("span", { className: "text-xs text-zinc-500 font-mono" }, `${events.length} events`));
-  panel.appendChild(header);
-
-  if (events.length === 0) {
-    panel.appendChild(h("div", { className: "p-4 text-xs text-zinc-600 italic" },
-      "No events yet. Events appear when the orchestrator starts running."
-    ));
-    return panel;
-  }
-
-  const eventColors = {
-    orchestrator_start: "text-blue-400",
-    orchestrator_end: "text-blue-400",
-    iteration_start: "text-zinc-400",
-    iteration_end: "text-zinc-400",
-    validation_pass: "text-emerald-400",
-    validation_fail: "text-red-400",
-    pause: "text-orange-400",
-    resume: "text-orange-400",
-    note: "text-violet-400",
-  };
-
-  // Show last 50 events, newest first
-  const recentEvents = events.slice(-50).reverse();
-  const list = h("div", { className: "max-h-64 overflow-y-auto divide-y divide-zinc-800/50 scrollbar-thin" });
-
-  for (const ev of recentEvents) {
-    const ts = ev.timestamp ? ev.timestamp.replace("T", " ").replace("Z", "") : "";
-    const shortTs = ts.length > 19 ? ts.slice(11, 19) : ts;
-    const color = eventColors[ev.event] || "text-zinc-500";
-
-    const row = h("div", { className: "px-4 py-1.5 flex items-center gap-3 text-xs" });
-    row.appendChild(h("span", { className: "text-zinc-600 font-mono w-16 flex-shrink-0" }, shortTs));
-    row.appendChild(h("span", { className: `font-mono ${color} w-32 flex-shrink-0` }, ev.event));
-    row.appendChild(h("span", { className: "text-zinc-500 truncate" }, ev.message || ""));
-    list.appendChild(row);
-  }
-
-  panel.appendChild(list);
-  return panel;
-}
+// --- Control Plane ---
 
 function ControlPlane() {
   const status = state.orchestrator.status || "idle";
-  const isPaused = status === "paused" ||
-    state.events.some(e => e.event === "pause" &&
-      !state.events.some(r => r.event === "resume" &&
-        new Date(r.timestamp) > new Date(e.timestamp)));
+  const paused = isPaused();
 
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
-
-  // Header with toggle
-  const header = h("div", {
-    className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between cursor-pointer",
-    onClick: () => { formState.controlOpen = !formState.controlOpen; render(); }
-  });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Control Plane"));
-  header.appendChild(h("span", { className: "text-xs text-zinc-500" }, formState.controlOpen ? "\u25B2" : "\u25BC"));
-  panel.appendChild(header);
-
-  if (!formState.controlOpen) return panel;
-
-  const body = h("div", { className: "p-4 space-y-4" });
+  const section = h("div", { className: "space-y-4" });
 
   // Command status flash
   if (formState.lastCommandStatus && (Date.now() - formState.lastCommandStatus.ts) < 5000) {
     const cs = formState.lastCommandStatus;
-    body.appendChild(h("div", {
-      className: `text-xs px-3 py-1.5 rounded ${cs.ok ? "bg-emerald-950/50 text-emerald-400 border border-emerald-900/50" : "bg-red-950/50 text-red-400 border border-red-900/50"}`
+    section.appendChild(h("div", {
+      className: `text-xs px-3 py-2 rounded-lg ${cs.ok ? "bg-emerald-950/30 text-emerald-400 border border-emerald-900/30" : "bg-red-950/30 text-red-400 border border-red-900/30"}`
     }, cs.message));
   }
 
-  // Pause / Resume toggle
+  // Pause / Resume
   const pauseRow = h("div", { className: "flex items-center gap-3" });
-  pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider w-20" }, "Execution"));
-  if (isPaused) {
+  pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider w-20 font-mono" }, "Execution"));
+  if (paused) {
     pauseRow.appendChild(h("button", {
-      className: "px-3 py-1.5 rounded text-xs font-medium bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 hover:bg-emerald-800/60 transition-colors",
+      className: "px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-900/40 text-emerald-400 border border-emerald-800/30 hover:bg-emerald-900/60 transition-colors",
       onClick: () => postCommand({ command: "resume" })
     }, "Resume"));
-    pauseRow.appendChild(h("span", { className: "text-xs text-orange-400" }, "Paused"));
+    pauseRow.appendChild(h("span", { className: "text-xs text-amber-400" }, "Paused"));
   } else {
     pauseRow.appendChild(h("button", {
-      className: "px-3 py-1.5 rounded text-xs font-medium bg-orange-900/60 text-orange-300 border border-orange-700/50 hover:bg-orange-800/60 transition-colors",
+      className: "px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-900/40 text-amber-400 border border-amber-800/30 hover:bg-amber-900/60 transition-colors",
       onClick: () => postCommand({ command: "pause" })
     }, "Pause"));
-    pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500" }, "Running"));
+    pauseRow.appendChild(h("span", { className: "text-xs text-zinc-500" }, status));
   }
-  body.appendChild(pauseRow);
+  section.appendChild(pauseRow);
 
   // Inject note
   const noteSection = h("div", { className: "space-y-2" });
-  noteSection.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider" }, "Inject Note"));
-
+  noteSection.appendChild(h("span", { className: "text-xs text-zinc-500 uppercase tracking-wider font-mono" }, "Inject Note"));
   const noteRow = h("div", { className: "flex gap-2" });
   const textarea = h("textarea", {
-    className: "flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-300 resize-none focus:border-blue-600 focus:outline-none",
+    className: "flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 resize-none focus:border-blue-600 focus:outline-none",
     rows: "2",
     placeholder: "Send a note to the orchestrator...",
     value: formState.noteText
   });
-  // Preserve textarea state across renders
   textarea.value = formState.noteText;
   textarea.addEventListener("input", (e) => { formState.noteText = e.target.value; });
-
   noteRow.appendChild(textarea);
   noteRow.appendChild(h("button", {
-    className: "px-3 py-1.5 rounded text-xs font-medium bg-violet-900/60 text-violet-300 border border-violet-700/50 hover:bg-violet-800/60 transition-colors self-end",
+    className: "px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-900/40 text-blue-400 border border-blue-800/30 hover:bg-blue-900/60 transition-colors self-end",
     onClick: () => {
       if (formState.noteText.trim()) {
         postCommand({ command: "inject-note", note: formState.noteText.trim() });
@@ -1202,29 +1224,18 @@ function ControlPlane() {
     }
   }, "Send"));
   noteSection.appendChild(noteRow);
-  body.appendChild(noteSection);
+  section.appendChild(noteSection);
 
-  panel.appendChild(body);
-  return panel;
+  return section;
 }
 
+// --- Settings Panel ---
+
 function SettingsPanel() {
-  const panel = h("div", { className: "bg-zinc-900/80 border border-zinc-800 rounded-lg overflow-hidden" });
-
-  const header = h("div", {
-    className: "px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between cursor-pointer",
-    onClick: () => { formState.settingsOpen = !formState.settingsOpen; render(); }
-  });
-  header.appendChild(h("h2", { className: "text-sm font-semibold text-zinc-300 uppercase tracking-wider" }, "Settings"));
-  header.appendChild(h("span", { className: "text-xs text-zinc-500" }, formState.settingsOpen ? "\u25B2" : "\u25BC"));
-  panel.appendChild(header);
-
-  if (!formState.settingsOpen) return panel;
-
-  const body = h("div", { className: "p-4 space-y-3" });
+  const section = h("div", { className: "space-y-3" });
 
   const settings = [
-    { key: "RALPH_MODE", label: "Mode", options: ["handoff-only", "handoff-plus-index"], current: state.orchestrator.mode || "handoff-only" },
+    { key: "RALPH_MODE", label: "Mode", options: ["handoff-only", "handoff-plus-index", "agent-orchestrated"], current: state.orchestrator.mode || "handoff-only" },
     { key: "RALPH_VALIDATION_STRATEGY", label: "Validation", options: ["strict", "lenient", "tests_only"], current: "strict" },
     { key: "RALPH_COMPACTION_INTERVAL", label: "Compaction Interval", options: ["3", "5", "8", "10"], current: "5" },
     { key: "RALPH_DEFAULT_MAX_TURNS", label: "Max Tool Rounds", options: ["50", "100", "200", "500"], current: "200" },
@@ -1233,148 +1244,303 @@ function SettingsPanel() {
 
   for (const s of settings) {
     const row = h("div", { className: "flex items-center gap-3" });
-    row.appendChild(h("span", { className: "text-xs text-zinc-500 w-32 flex-shrink-0" }, s.label));
-
+    row.appendChild(h("span", { className: "text-xs text-zinc-500 w-36 flex-shrink-0" }, s.label));
     const select = h("select", {
-      className: "bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 focus:border-blue-600 focus:outline-none"
+      className: "bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-300 font-mono focus:border-blue-600 focus:outline-none"
     });
     for (const opt of s.options) {
       const option = h("option", { value: opt }, opt);
       if (opt === s.current) option.selected = true;
       select.appendChild(option);
     }
-
     const settingKey = s.key;
     select.addEventListener("change", (e) => {
       const obj = {};
       obj[settingKey] = e.target.value;
       postSettings(obj);
     });
-
     row.appendChild(select);
-    body.appendChild(row);
+    section.appendChild(row);
   }
 
-  body.appendChild(h("div", { className: "text-xs text-zinc-600 italic pt-1" },
-    "Changes apply on next orchestrator iteration. Mode changes take effect on restart."
+  section.appendChild(h("div", { className: "text-xs text-zinc-600 pt-1" },
+    "Changes apply on next iteration. Mode changes take effect on restart."
   ));
 
-  panel.appendChild(body);
-  return panel;
+  return section;
+}
+
+// --- Architecture Diagram ---
+
+function ArchDiagram() {
+  const mode = state.orchestrator.mode || "handoff-only";
+
+  const handoffOnlyDiagram = `
+  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510
+  \u2502               ralph.sh loop                 \u2502
+  \u2502                                             \u2502
+  \u2502  1. Read plan.json \u2192 next pending task      \u2502
+  \u2502  2. Assemble prompt:                        \u2502
+  \u2502     \u2022 task description                      \u2502
+  \u2502     \u2022 previous handoff (verbatim)           \u2502
+  \u2502     \u2022 skill files                           \u2502
+  \u2502  3. Create git checkpoint                   \u2502
+  \u2502  4. claude -p \u2192 coding iteration            \u2502
+  \u2502  5. Parse handoff from structured output    \u2502
+  \u2502  6. Run validation                          \u2502
+  \u2502  7. Pass \u2192 commit \u2502 Fail \u2192 rollback         \u2502
+  \u2502  8. Save handoff \u2192 handoffs/NNN.json        \u2502
+  \u2502  9. Loop                                    \u2502
+  \u2502                                             \u2502
+  \u2502  Three artifacts:                           \u2502
+  \u2502  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2510  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502
+  \u2502  \u2502 Plan \u2502\u2192 \u2502 Handoff  \u2502\u2192 \u2502 Next prompt \u2502    \u2502
+  \u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2518  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502
+  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518`;
+
+  const indexDiagram = `
+  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510
+  \u2502               ralph.sh loop                 \u2502
+  \u2502                                             \u2502
+  \u2502  CODING ITERATION (most loops):             \u2502
+  \u2502  1. Read plan.json \u2192 next pending task      \u2502
+  \u2502  2. Assemble prompt:                        \u2502
+  \u2502     \u2022 task description                      \u2502
+  \u2502     \u2022 previous handoff (verbatim)           \u2502
+  \u2502     \u2022 knowledge index header (lightweight)  \u2502
+  \u2502     \u2022 skill files                           \u2502
+  \u2502  3. Checkpoint \u2192 claude -p \u2192 validate       \u2502
+  \u2502  4. Commit/rollback \u2192 save handoff          \u2502
+  \u2502                                             \u2502
+  \u2502  COMPACTION ITERATION (every N loops):      \u2502
+  \u2502  1. Read all handoffs since last compaction  \u2502
+  \u2502  2. claude -p \u2192 organize into index         \u2502
+  \u2502  3. Output: index entries + tagged summaries \u2502
+  \u2502  4. Agent does NOT inject \u2014 just indexes     \u2502
+  \u2502                                             \u2502
+  \u2502  Three artifacts + index:                   \u2502
+  \u2502  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2510  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510          \u2502
+  \u2502  \u2502 Plan \u2502  \u2502 Handoff  \u2502  \u2502 Index \u2502          \u2502
+  \u2502  \u2514\u2500\u2500\u252C\u2500\u2500\u2500\u2518  \u2514\u2500\u2500\u2500\u2500\u252C\u2500\u2500\u2500\u2500\u2518  \u2514\u2500\u2500\u2500\u252C\u2500\u2500\u2500\u2518          \u2502
+  \u2502     \u2514\u2500\u2500\u2500\u2500\u2500\u252C\u2500\u2500\u2500\u2500\u2500\u2518           \u2502               \u2502
+  \u2502     \u250C\u2500\u2500\u2500\u2500\u2500\u25BC\u2500\u2500\u2500\u2500\u2500\u2510    \u250C\u2500\u2500\u2500\u2500\u2500\u25BC\u2500\u2500\u2500\u2500\u2500\u2510         \u2502
+  \u2502     \u2502Next prompt \u2502    \u2502 grep/read \u2502         \u2502
+  \u2502     \u2502(plan+hand) \u2502    \u2502 on demand \u2502         \u2502
+  \u2502     \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518         \u2502
+  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518`;
+
+  const details = document.createElement("details");
+  details.className = "border border-zinc-800/30 rounded-lg overflow-hidden";
+  const summaryEl = document.createElement("summary");
+  summaryEl.className = "px-4 py-3 flex items-center justify-between hover:bg-zinc-800/20 transition-colors";
+  summaryEl.appendChild(h("span", { className: "text-xs text-zinc-400 uppercase tracking-wider font-mono" },
+    `Architecture \u2014 ${mode === "handoff-only" ? "Handoff Only" : mode === "handoff-plus-index" ? "Handoff + Index" : "Agent Orchestrated"}`
+  ));
+  summaryEl.appendChild(h("span", { className: "text-xs text-zinc-600" }, "\u25B8"));
+  details.appendChild(summaryEl);
+
+  details.appendChild(h("div", { className: "p-4 font-mono text-xs leading-relaxed" },
+    h("pre", { className: "text-zinc-500 overflow-x-auto" },
+      mode === "handoff-only" ? handoffOnlyDiagram : indexDiagram
+    )
+  ));
+
+  return details;
+}
+
+// --- View Compositions ---
+
+function RunView() {
+  const container = h("div", {
+    className: "grid grid-cols-1 lg:grid-cols-5 gap-6 p-6",
+    style: { height: "calc(100vh - 48px)" }
+  });
+
+  // Left column: TaskPlan + GitTimeline
+  const left = h("div", { className: "lg:col-span-2 flex flex-col gap-0 overflow-y-auto scrollbar-thin" });
+  left.appendChild(TaskPlan());
+  left.appendChild(GitTimeline());
+  container.appendChild(left);
+
+  // Right column: HandoffViewer
+  const right = h("div", { className: "lg:col-span-3 overflow-hidden" });
+  right.appendChild(HandoffViewer());
+  container.appendChild(right);
+
+  return container;
+}
+
+function LogView() {
+  const container = h("div", { className: "p-6" });
+  container.appendChild(EventLog());
+  return container;
+}
+
+function InsightsView() {
+  const container = h("div", { className: "p-6 space-y-0" });
+
+  // Tab bar
+  const tabBar = h("div", { className: "flex gap-0 mb-4" });
+  const tabs = [
+    { id: "progress", label: "Progress Log" },
+    { id: "knowledge", label: "Knowledge Index" },
+  ];
+  for (const tab of tabs) {
+    tabBar.appendChild(h("button", {
+      className: `px-4 py-2 text-sm transition-colors border-b-2 ${
+        state.insightsTab === tab.id
+          ? "border-blue-400 text-zinc-200"
+          : "border-transparent text-zinc-500 hover:text-zinc-300"
+      }`,
+      onClick: () => { state.insightsTab = tab.id; render(); }
+    }, tab.label));
+  }
+  container.appendChild(tabBar);
+
+  if (state.insightsTab === "progress") {
+    container.appendChild(ProgressLog());
+  } else {
+    container.appendChild(KnowledgeIndex());
+  }
+
+  return container;
+}
+
+function ControlView() {
+  const m = computeMetrics();
+
+  const container = h("div", { className: "p-6 space-y-6" });
+
+  // Two-column layout
+  const grid = h("div", { className: "grid grid-cols-1 lg:grid-cols-2 gap-6" });
+
+  // Left: Control Plane + Metrics
+  const leftPanel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl p-5 space-y-6" });
+  leftPanel.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Control Plane"));
+  leftPanel.appendChild(ControlPlane());
+
+  // Full metrics block
+  const metricsSection = h("div", { className: "space-y-3 pt-4 border-t border-zinc-800/30" });
+  metricsSection.appendChild(h("div", { className: "text-xs text-zinc-500 uppercase tracking-wider font-mono" }, "Metrics"));
+  const metricsGrid = h("div", { className: "grid grid-cols-2 gap-3" });
+  const metricItems = [
+    { label: "Iteration", value: String(m.iteration), color: "text-blue-400" },
+    { label: "Tasks", value: `${m.tasksDone}/${m.tasksTotal}`, color: "text-emerald-400" },
+    { label: "Pass / Fail", value: `${m.valPass} / ${m.valFail}`, color: "text-zinc-300" },
+    { label: "Rollbacks", value: String(m.rollbacks), color: m.rollbacks > 0 ? "text-red-400" : "text-zinc-500" },
+    { label: "Avg Duration", value: m.avgDuration > 0 ? `${m.avgDuration}s` : "\u2014", color: "text-zinc-300" },
+    { label: "Files Changed", value: String(m.totalFiles), color: "text-zinc-300" },
+    { label: "Compactions", value: String(m.compactions), color: "text-zinc-400" },
+    { label: "Elapsed", value: m.elapsed > 0 ? `${m.elapsed}m` : "\u2014", color: "text-zinc-300" },
+  ];
+  for (const item of metricItems) {
+    metricsGrid.appendChild(h("div", { className: "flex justify-between items-center" },
+      h("span", { className: "text-xs text-zinc-500" }, item.label),
+      h("span", { className: `text-sm font-mono font-semibold ${item.color}` }, item.value)
+    ));
+  }
+  metricsSection.appendChild(metricsGrid);
+  leftPanel.appendChild(metricsSection);
+  grid.appendChild(leftPanel);
+
+  // Right: Settings + Architecture
+  const rightPanel = h("div", { className: "bg-zinc-900/60 border border-zinc-800/50 rounded-xl p-5 space-y-6" });
+  rightPanel.appendChild(h("h2", { className: "text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono" }, "Settings"));
+  rightPanel.appendChild(SettingsPanel());
+
+  // Architecture diagram
+  const archSection = h("div", { className: "pt-4 border-t border-zinc-800/30" });
+  archSection.appendChild(ArchDiagram());
+  rightPanel.appendChild(archSection);
+  grid.appendChild(rightPanel);
+
+  container.appendChild(grid);
+  return container;
 }
 
 // --- Main Render ---
+
 function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
 
-  const status = state.orchestrator.status || "idle";
-  const mode = getViewMode();
+  const layout = h("div", { className: "flex min-h-screen" });
+
+  // Sidebar
+  layout.appendChild(SidebarNav());
+
+  // Main content area
+  const main = h("div", { className: "flex-1 ml-14 flex flex-col" });
 
   // Header
-  const headerBar = h("div", { className: "border-b border-zinc-800 bg-zinc-950/95 sticky top-0 z-50" });
-  const headerInner = h("div", { className: "max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-2" });
-
-  // Left: title + status
-  const headerLeft = h("div", { className: "flex items-center gap-4" });
-  headerLeft.appendChild(h("h1", { className: "text-lg font-bold tracking-tight" },
-    h("span", { className: "text-blue-400" }, "Ralph"),
-    h("span", { className: "text-zinc-500" }, " Deluxe"),
-    h("span", { className: "text-zinc-700 text-xs ml-2" }, "v2")
-  ));
-
-  const statusGroup = h("div", { className: "flex items-center gap-2" });
-  const dotClass = status === "running" ? "bg-emerald-400 pulse-dot" : "bg-zinc-600";
-  statusGroup.appendChild(h("div", { className: `w-2 h-2 rounded-full ${dotClass}` }));
-  statusGroup.appendChild(StatusBadge(status));
-  headerLeft.appendChild(statusGroup);
-  headerInner.appendChild(headerLeft);
-
-  // Right: mode toggle + tabs
-  const headerRight = h("div", { className: "flex items-center gap-3 flex-wrap" });
-  headerRight.appendChild(ModeToggle());
-
-  const tabBar = h("div", { className: "flex rounded-lg overflow-hidden border border-zinc-800" });
-  for (const tab of ["dashboard", "architecture"]) {
-    tabBar.appendChild(h("button", {
-      className: `px-3 py-1.5 text-xs uppercase tracking-wider transition-colors ${
-        state.activeTab === tab ? "bg-zinc-800 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
-      }`,
-      onClick: () => { state.activeTab = tab; render(); }
-    }, tab));
-  }
-  headerRight.appendChild(tabBar);
-  headerInner.appendChild(headerRight);
-  headerBar.appendChild(headerInner);
-  app.appendChild(headerBar);
-
-  // Content
-  const contentWrap = h("div", { className: "max-w-7xl mx-auto px-4 py-4 space-y-4" });
+  main.appendChild(HeaderBar());
 
   // Error banner
   if (state.error) {
-    contentWrap.appendChild(h("div", {
-      className: "bg-red-950/50 border border-red-900/50 rounded-lg p-3 text-xs text-red-400"
+    main.appendChild(h("div", {
+      className: "mx-6 mt-4 bg-red-950/30 border border-red-900/30 rounded-lg p-3 text-sm text-red-400"
     }, state.error));
   }
 
-  if (state.activeTab === "dashboard") {
-    contentWrap.appendChild(MetricsStrip());
-
-    const grid = h("div", { className: "grid grid-cols-1 lg:grid-cols-3 gap-4" });
-
-    // Left column: TaskPlan + ControlPlane + GitTimeline + EventLog + Settings
-    const leftCol = h("div", { className: "lg:col-span-1 space-y-4" });
-    leftCol.appendChild(TaskPlan());
-    leftCol.appendChild(ControlPlane());
-    leftCol.appendChild(GitTimeline());
-    leftCol.appendChild(EventLog());
-    leftCol.appendChild(SettingsPanel());
-    grid.appendChild(leftCol);
-
-    // Right column: HandoffViewer + ProgressLog + KnowledgeIndex
-    const rightCol = h("div", { className: "lg:col-span-2 space-y-4" });
-    rightCol.appendChild(HandoffViewer());
-    rightCol.appendChild(ProgressLog());
-    rightCol.appendChild(KnowledgeIndex());
-    grid.appendChild(rightCol);
-
-    contentWrap.appendChild(grid);
-  } else {
-    contentWrap.appendChild(ArchDiagram());
+  // View content
+  switch (state.activeView) {
+    case "run":      main.appendChild(RunView()); break;
+    case "log":      main.appendChild(LogView()); break;
+    case "insights": main.appendChild(InsightsView()); break;
+    case "control":  main.appendChild(ControlView()); break;
+    default:         main.appendChild(RunView()); break;
   }
 
-  // Footer
-  const footer = h("div", { className: "border-t border-zinc-800 pt-3 pb-6 flex items-center justify-between text-xs text-zinc-600 flex-wrap gap-2" });
-  footer.appendChild(h("div", {},
-    `Handoff-first orchestration \u2022 Plan + Handoff + ${mode === "handoff-only" ? "no compaction" : "Knowledge Index"}`
-  ));
-  footer.appendChild(h("div", {},
-    `Polling state.json every 3s \u2022 ${mode === "handoff-plus-index" ? "Compaction every 5 coding iterations" : "No compaction overhead"}`
-  ));
-  contentWrap.appendChild(footer);
+  layout.appendChild(main);
+  app.appendChild(layout);
+}
 
-  app.appendChild(contentWrap);
+// --- Keyboard Shortcuts ---
+
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    // Don't capture when typing in inputs
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+
+    // View switching: 1-4
+    if (e.key === "1") { state.activeView = "run"; render(); }
+    else if (e.key === "2") { state.activeView = "log"; render(); }
+    else if (e.key === "3") { state.activeView = "insights"; render(); }
+    else if (e.key === "4") { state.activeView = "control"; render(); }
+
+    // Handoff navigation: left/right arrows (Run view only)
+    else if (e.key === "ArrowLeft" && state.activeView === "run") {
+      if (state.selectedHandoff > 0) { state.selectedHandoff--; render(); }
+    }
+    else if (e.key === "ArrowRight" && state.activeView === "run") {
+      if (state.selectedHandoff < state.handoffs.length - 1) { state.selectedHandoff++; render(); }
+    }
+
+    // Pause/resume: space
+    else if (e.key === " " && state.activeView === "run") {
+      e.preventDefault();
+      postCommand({ command: isPaused() ? "resume" : "pause" });
+    }
+  });
 }
 
 // --- Init ---
+
 function init() {
-  // Initial render with defaults
   render();
-  // Start polling immediately
   pollData();
-  // Poll every 3 seconds
   setInterval(pollData, 3000);
+  initKeyboardShortcuts();
 }
 
 // Detect protocol — warn if file://
 if (window.location.protocol === "file:") {
   document.getElementById("app").innerHTML = `
-    <div style="padding: 40px; font-family: monospace; color: #a1a1aa; max-width: 600px; margin: 0 auto;">
+    <div style="padding: 40px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #a1a1aa; max-width: 600px; margin: 0 auto;">
       <h1 style="color: #60a5fa; font-size: 18px; margin-bottom: 16px;">Ralph Deluxe Dashboard</h1>
       <p style="color: #ef4444; margin-bottom: 12px;">Cannot poll files via file:// protocol.</p>
       <p style="margin-bottom: 12px;">Serve the project root with the Ralph server (enables control plane):</p>
-      <pre style="background: #18181b; padding: 12px; border-radius: 6px; border: 1px solid #27272a; color: #e4e4e7;">cd ${window.location.pathname.replace("/.ralph/dashboard.html", "") || "your-project-root"}
+      <pre style="background: #18181b; padding: 12px; border-radius: 8px; border: 1px solid #27272a; color: #e4e4e7; font-family: 'JetBrains Mono', monospace;">cd ${window.location.pathname.replace("/.ralph/dashboard.html", "") || "your-project-root"}
 python3 .ralph/serve.py --port 8080</pre>
       <p style="margin-top: 8px; color: #71717a; font-size: 12px;">Or for read-only mode: <code style="color: #a1a1aa;">python3 -m http.server 8080</code></p>
       <p style="margin-top: 12px;">Then open: <a href="http://localhost:8080/.ralph/dashboard.html" style="color: #60a5fa;">http://localhost:8080/.ralph/dashboard.html</a></p>
