@@ -136,8 +136,10 @@
         "Search input field present",
         "Task list container with identifiable ID for JS targeting",
         "All elements have appropriate id/class attributes",
+        "Add Playwright test in tests/e2e/structure.spec.js verifying form, task list container, and filter controls render in the browser",
         "All tests pass (npm test)",
-        "No lint errors (npm run lint)"
+        "No lint errors (npm run lint)",
+        "All Playwright tests pass (npx playwright test)"
       ],
       "depends_on": ["TASK-001"],
       "retry_count": 0,
@@ -159,8 +161,10 @@
         "Delete button calls deleteTask for the correct task ID",
         "Status filter change triggers filtered fetch",
         "Search input is debounced (at least 300ms)",
+        "Add Playwright test in tests/e2e/tasks.spec.js verifying creating and listing tasks via the UI",
         "All tests pass (npm test)",
-        "No lint errors (npm run lint)"
+        "No lint errors (npm run lint)",
+        "All Playwright tests pass (npx playwright test)"
       ],
       "depends_on": ["TASK-003", "TASK-006"],
       "retry_count": 0,
@@ -182,8 +186,10 @@
         "Dark mode support via prefers-color-scheme media query",
         "Form inputs have visible focus states",
         "Task cards have border and subtle shadow",
+        "All existing Playwright tests continue to pass",
         "All tests pass (npm test)",
-        "No lint errors (npm run lint)"
+        "No lint errors (npm run lint)",
+        "All Playwright tests pass (npx playwright test)"
       ],
       "depends_on": ["TASK-006"],
       "retry_count": 0,
@@ -206,8 +212,10 @@
         "500 errors hide stack traces in production",
         "Frontend displays errors in a dismissable notification area",
         "Network errors show user-friendly message",
+        "Add Playwright test in tests/e2e/errors.spec.js verifying error messages display and auto-dismiss in the browser",
         "All tests pass (npm test)",
-        "No lint errors (npm run lint)"
+        "No lint errors (npm run lint)",
+        "All Playwright tests pass (npx playwright test)"
       ],
       "depends_on": ["TASK-004", "TASK-007"],
       "retry_count": 0,
@@ -323,8 +331,10 @@
         "Keyboard shortcuts work: n, /, Escape, arrows, Enter",
         "? key shows help tooltip listing shortcuts",
         "Shortcuts disabled when focus is in an input field",
+        "Add Playwright test in tests/e2e/shortcuts.spec.js verifying keyboard shortcuts work in the browser",
         "All tests pass (npm test)",
-        "No lint errors (npm run lint)"
+        "No lint errors (npm run lint)",
+        "All Playwright tests pass (npx playwright test)"
       ],
       "depends_on": ["TASK-013"],
       "retry_count": 0,

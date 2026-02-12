@@ -57,6 +57,33 @@ res.status(400).json({
 });
 ```
 
+## E2E Testing with Playwright
+
+Playwright tests live in `tests/e2e/` and use `.spec.js` extension (NOT `.test.js`).
+
+```js
+const { test, expect } = require('@playwright/test');
+
+test('can create a task via the UI', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('input[name="title"]', 'My new task');
+  await page.click('button[type="submit"]');
+  await expect(page.locator('.task-item')).toContainText('My new task');
+});
+
+test('displays tasks from API', async ({ page }) => {
+  await page.goto('/');
+  // Wait for tasks to load from the API
+  await expect(page.locator('.task-list')).toBeVisible();
+});
+```
+
+- `playwright.config.js` auto-starts the Express server — no manual `app.listen()` in tests
+- Use `page.locator()` with CSS selectors to find elements
+- Use `expect(locator).toBeVisible()`, `.toContainText()`, `.toHaveCount()` for assertions
+- For keyboard shortcuts: `await page.keyboard.press('Control+n')`
+- Each `.spec.js` file gets a fresh browser context — no state leaks between files
+
 ## ESLint Compliance
 - Use `'single quotes'` everywhere
 - End all statements with `;`

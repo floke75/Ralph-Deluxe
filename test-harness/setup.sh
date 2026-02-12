@@ -30,9 +30,11 @@ mkdir -p "$WORKSPACE"
 log "Copying project template"
 cp -R "$SCRIPT_DIR/project-template/." "$WORKSPACE/"
 
-# --- 3. npm install ---
+# --- 3. npm install + Playwright browser ---
 log "Running npm install (this may take a minute)"
 (cd "$WORKSPACE" && npm install --loglevel=error 2>&1) >&2
+log "Installing Playwright Chromium browser"
+(cd "$WORKSPACE" && npx playwright install chromium 2>&1) >&2
 
 # --- 4. Initialize git repo ---
 log "Initializing git repo"

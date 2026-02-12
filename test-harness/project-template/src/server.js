@@ -10,4 +10,8 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Routes to be implemented by Ralph
 
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+}
+
 module.exports = { app, PORT };
