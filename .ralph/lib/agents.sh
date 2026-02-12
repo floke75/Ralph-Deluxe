@@ -52,20 +52,10 @@ if ! declare -f log >/dev/null 2>&1; then
     log() { echo "[$(date '+%H:%M:%S')] [$1] $2" >&2; }
 fi
 
-# Required section headers for prepared coding prompts.
-# WHY: Agent-orchestrated mode now validates the same canonical section
-# structure expected by truncation logic and downstream prompt handling.
-readonly AGENT_PROMPT_REQUIRED_HEADERS=(
-    "## Current Task"
-    "## Failure Context"
-    "## Retrieved Memory"
-    "## Previous Handoff"
-    "## Retrieved Project Memory"
-    "## Skills"
-    "## Output Instructions"
-)
-
 # Validate that a prepared prompt contains all canonical sections.
+# WHY: Uses a function with inline header list instead of a global array because
+# bash 3.2 (macOS default) triggers "unbound variable" on ${array[@]} with set -u
+# even when the array IS defined — a known bash 3.2 bug.
 # Args: $1 = prepared prompt file path
 # Returns: 0 when valid, 1 when any required section is missing
 validate_prepared_prompt_structure() {
@@ -76,16 +66,23 @@ validate_prepared_prompt_structure() {
         return 1
     fi
 
-    local missing=()
+    local missing=""
     local header
-    for header in "${AGENT_PROMPT_REQUIRED_HEADERS[@]}"; do
+    for header in \
+        "## Current Task" \
+        "## Failure Context" \
+        "## Retrieved Memory" \
+        "## Previous Handoff" \
+        "## Retrieved Project Memory" \
+        "## Skills" \
+        "## Output Instructions"; do
         if ! grep -Fq "$header" "$prompt_file"; then
-            missing+=("$header")
+            missing="${missing:+$missing, }$header"
         fi
     done
 
-    if [[ "${#missing[@]}" -gt 0 ]]; then
-        log "error" "Prepared prompt missing required sections: ${missing[*]}"
+    if [[ -n "$missing" ]]; then
+        log "error" "Prepared prompt missing required sections: $missing"
         return 1
     fi
 
@@ -431,6 +428,20 @@ EOF
         if [[ -f "$prepared_prompt" ]] && [[ "$(wc -c < "$prepared_prompt" | tr -d ' ')" -ge 50 ]]; then
             log "warn" "Context prep agent returned text instead of JSON, but prepared-prompt.md exists — defaulting to proceed"
             directive_json='{"action":"proceed","reason":"Agent wrote prompt but did not return structured directive","stuck_detection":{"is_stuck":false}}'
+            # WHY: Early return here instead of falling through to the normal validation path.
+            # In bash 3.2, set -e leaks into command substitutions even inside conditionals
+            # (if ! var=$(func)), causing silent exits on intermediate commands. Validate
+            # the prompt inline and return to avoid that code path entirely.
+            if ! validate_prepared_prompt_structure "$prepared_prompt"; then
+                log "error" "Prepared prompt (from fallback) failed structural validation"
+                return 1
+            fi
+            local fallback_size
+            fallback_size="$(wc -c < "$prepared_prompt" | tr -d ' ')" || fallback_size=0
+            log "info" "Context prep complete (fallback): action=proceed, prompt=${fallback_size} bytes"
+            log "info" "--- Context preparation end ---"
+            echo "$directive_json"
+            return 0
         else
             log "error" "Failed to parse context prep agent output and no prepared prompt found"
             return 1
