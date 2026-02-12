@@ -1538,7 +1538,6 @@ project-root/
 │   │   └── validation/                          #   Per-iteration validation results
 │   │       └── iter-N.json
 │   └── docs/
-│       └── documentation-update-plan.md
 │
 ├── tests/
 │   ├── test_helper/

@@ -1,7 +1,7 @@
 # Ralph-Deluxe v2 — Progress Log
 
 **Purpose:** Consolidated record of all PR implementations, handoffs, and design decisions.
-This is a working reference file — not a handoff prompt. For current status, see `v2-implementation-status.md`.
+This is a working reference file — not a handoff prompt.
 
 ---
 
