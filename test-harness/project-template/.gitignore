@@ -1,0 +1,7 @@
+node_modules/
+coverage/
+.ralph/logs/
+.ralph/handoffs/
+.ralph/context/
+.ralph/memory.jsonl
+.DS_Store

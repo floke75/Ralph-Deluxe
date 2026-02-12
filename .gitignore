@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 node_modules/
+.DS_Store
+.vscode/
 
 # Runtime artifacts (must not be git-tracked — rollback would erase them)
 .ralph/state.json
@@ -13,3 +15,6 @@ node_modules/
 .ralph/handoffs/
 .ralph/logs/
 .ralph/control/
+
+# Test harness results (generated per-run, not tracked)
+test-harness/results/

@@ -1,0 +1,19 @@
+{
+  "name": "ralph-test-tasktracker",
+  "version": "1.0.0",
+  "description": "Task tracker API + web UI — Ralph pipeline test project",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest --forceExit --detectOpenHandles",
+    "lint": "eslint src/ tests/ --max-warnings 0"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4"
+  }
+}
