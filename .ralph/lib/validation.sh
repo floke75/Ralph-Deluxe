@@ -96,14 +96,15 @@ run_validation() {
 
     # Guard: warn if no validation commands are configured (fixes H3).
     # An empty array silently auto-passes validation which can mask real failures.
-    if [[ ${#RALPH_VALIDATION_COMMANDS[@]} -eq 0 ]]; then
+    # WHY: ${arr[@]+x} pattern — Bash 3.2 treats empty arrays as unset under set -u.
+    if [[ -z "${RALPH_VALIDATION_COMMANDS[@]+x}" ]] || [[ ${#RALPH_VALIDATION_COMMANDS[@]} -eq 0 ]]; then
         log "warn" "No validation commands configured — auto-passing validation"
     fi
 
     local checks_json="[]"
     local cmd output exit_code cmd_type
 
-    for cmd in "${RALPH_VALIDATION_COMMANDS[@]}"; do
+    for cmd in ${RALPH_VALIDATION_COMMANDS[@]+"${RALPH_VALIDATION_COMMANDS[@]}"}; do
         cmd_type="$(classify_command "$cmd")"
         log "Running validation check: $cmd (type: $cmd_type)"
 

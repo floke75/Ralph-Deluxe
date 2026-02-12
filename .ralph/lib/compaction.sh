@@ -615,28 +615,21 @@ verify_knowledge_index() {
         return 1
     fi
 
-    # Build set of all known memory IDs
-    declare -A id_set=()
-    local memory_id
-    while IFS= read -r memory_id; do
-        [[ -z "$memory_id" ]] && continue
-        id_set["$memory_id"]=1
-    done < <(jq -r '.[] | (.memory_ids // [])[]? | strings' "$knowledge_index_json" | sort -u)
+    # Verify all supersedes references point to existing memory IDs.
+    # WHY: Single jq call avoids declare -A (Bash 4.0+, unavailable on macOS default bash 3.2).
+    local missing_supersedes
+    missing_supersedes=$(jq -r '
+      ( [.[] | (.memory_ids // [])[] | strings] | unique ) as $all_ids |
+      [ .[]
+        | .supersedes? // empty
+        | if type == "array" then .[] else . end
+        | strings
+      ] | unique | map(select(. as $s | $all_ids | index($s) | not))
+      | join(",")
+    ' "$knowledge_index_json")
 
-    # Verify all supersedes references point to existing IDs
-    local -a missing_targets=()
-    local target
-    while IFS= read -r target; do
-        [[ -z "$target" ]] && continue
-        if [[ -z "${id_set[$target]+x}" ]]; then
-            missing_targets+=("$target")
-        fi
-    done < <(jq -r '.[] | .supersedes? // empty | if type == "array" then .[] else . end | strings' "$knowledge_index_json")
-
-    if (( ${#missing_targets[@]} > 0 )); then
-        local missing_csv
-        missing_csv=$(printf '%s\n' "${missing_targets[@]}" | sort -u | paste -sd',' -)
-        log "error" "knowledge-index.json has supersedes references to unknown memory_ids: ${missing_csv}"
+    if [[ -n "$missing_supersedes" ]]; then
+        log "error" "knowledge-index.json has supersedes references to unknown memory_ids: ${missing_supersedes}"
         return 1
     fi
 

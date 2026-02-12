@@ -348,6 +348,8 @@ CONF
 
 @test "ralph.sh defaults to handoff-only mode when no --mode flag given" {
     cd "$TEST_DIR"
+    # Remove any RALPH_MODE from config so we test the true default
+    sed -i.bak '/^RALPH_MODE=/d' "$TEST_DIR/.ralph/config/ralph.conf"
     run bash "$TEST_DIR/.ralph/ralph.sh" --dry-run --plan "$TEST_DIR/plan.json"
     [[ "$status" -eq 0 ]]
 
