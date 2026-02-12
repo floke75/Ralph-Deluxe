@@ -52,7 +52,7 @@ fi
 detect_mcp_transport() {
     local transport
     if [[ -n "${RALPH_MCP_TRANSPORT:-}" ]]; then
-        transport="${RALPH_MCP_TRANSPORT,,}"  # lowercase
+        transport="$(echo "$RALPH_MCP_TRANSPORT" | tr '[:upper:]' '[:lower:]')"
         if [[ "$transport" != "stdio" && "$transport" != "http" ]]; then
             log "warn" "Invalid RALPH_MCP_TRANSPORT='${RALPH_MCP_TRANSPORT}'; expected stdio|http, defaulting to stdio"
             transport="stdio"

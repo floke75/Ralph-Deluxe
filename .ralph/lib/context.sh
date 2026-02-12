@@ -257,26 +257,26 @@ truncate_to_budget() {
 
             if [[ -n "$skills" ]]; then
                 skills=""
-                [[ " ${truncated_sections[*]} " == *" Skills "* ]] || truncated_sections+=("Skills")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Skills "* ]] || truncated_sections+=("Skills")
             elif [[ -n "$output_instructions" ]]; then
                 output_instructions=""
-                [[ " ${truncated_sections[*]} " == *" Output Instructions "* ]] || truncated_sections+=("Output Instructions")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Output Instructions "* ]] || truncated_sections+=("Output Instructions")
             elif [[ -n "$previous_handoff" ]]; then
                 previous_handoff=""
-                [[ " ${truncated_sections[*]} " == *" Previous Handoff "* ]] || truncated_sections+=("Previous Handoff")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Previous Handoff "* ]] || truncated_sections+=("Previous Handoff")
             elif [[ -n "$retrieved_project_memory" ]]; then
                 retrieved_project_memory=""
-                [[ " ${truncated_sections[*]} " == *" Retrieved Project Memory "* ]] || truncated_sections+=("Retrieved Project Memory")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Retrieved Project Memory "* ]] || truncated_sections+=("Retrieved Project Memory")
             elif [[ -n "$retrieved_memory" ]]; then
                 retrieved_memory=""
-                [[ " ${truncated_sections[*]} " == *" Retrieved Memory "* ]] || truncated_sections+=("Retrieved Memory")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Retrieved Memory "* ]] || truncated_sections+=("Retrieved Memory")
             elif [[ -n "$failure_context" ]]; then
                 failure_context=""
-                [[ " ${truncated_sections[*]} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Failure Context "* ]] || truncated_sections+=("Failure Context")
             else
                 # Last-resort: hard truncate to budget, keeping content from the beginning
                 rebuilt="${rebuilt:0:$max_chars}"
-                [[ " ${truncated_sections[*]} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
+                [[ " ${truncated_sections[*]+${truncated_sections[*]}} " == *" Current Task "* ]] || truncated_sections+=("Current Task")
                 break
             fi
 
@@ -284,7 +284,7 @@ truncate_to_budget() {
         done
 
         local trunc_json
-        trunc_json=$(printf '%s\n' "${truncated_sections[@]}" | jq -R . | jq -s --argjson max_chars "$max_chars" --argjson original_chars "$current_chars" '{truncated_sections: ., max_chars: $max_chars, original_chars: $original_chars}')
+        trunc_json=$(printf '%s\n' ${truncated_sections[@]+"${truncated_sections[@]}"} | jq -R . | jq -s --argjson max_chars "$max_chars" --argjson original_chars "$current_chars" '{truncated_sections: ., max_chars: $max_chars, original_chars: $original_chars}')
         echo "$rebuilt"
         # Emit metadata to stderr so it's available for tests/logging but NOT
         # included in the prompt content sent to the LLM (fixes C4).
