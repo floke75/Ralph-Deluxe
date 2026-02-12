@@ -188,7 +188,7 @@ Resolution: `RALPH_MCP_TRANSPORT` > `CLAUDE_CODE_REMOTE` auto-detect > default `
 
 Project-root `.mcp.json` provides Context7 (HTTP) for interactive Claude Code Web sessions (independent of orchestrator config).
 
-HTTP endpoint: `https://context7.liam.sh/mcp` (community, no API key). Official alternative: `https://api.context7.com/mcp` (requires `ctx7sk_*` key).
+HTTP endpoint: `https://mcp.context7.com/mcp` (official, no API key for basic use). Legacy community endpoint `https://context7.liam.sh/mcp` is deprecated/non-functional.
 
 **Context7 tools** (v2.1.1+): `resolve-library-id` (requires both `libraryName` and `query` params) → `query-docs` (requires `libraryId` and `query`). Templates reference these by name; the context agent discovers them dynamically via MCP tool listing.
 
