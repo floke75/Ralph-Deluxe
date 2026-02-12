@@ -24,8 +24,8 @@ claude -p --strict-mcp-config --mcp-config .ralph/config/mcp-memory.json ...
 
 ## Context7 Usage
 Two-step process — do NOT skip the first step:
-1. **Resolve the library ID**: Call `resolve-library-id` with the library name (e.g., "react"). Returns the Context7-compatible ID.
-2. **Fetch documentation**: Call `get-library-docs` with the resolved ID. Returns relevant API docs and usage examples.
+1. **Resolve the library ID**: Call `resolve-library-id` with both `libraryName` (e.g., "react") and `query` (e.g., "React hooks for state management"). Returns the Context7-compatible ID.
+2. **Fetch documentation**: Call `query-docs` with the resolved `libraryId` and a specific `query`. Returns relevant API docs and usage examples.
 
 Always resolve first, then fetch. The library name alone is not a valid ID.
 

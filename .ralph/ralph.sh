@@ -306,7 +306,7 @@ build_memory_prompt() {
         if [[ "$needs_docs" == "true" || -n "$libraries" ]]; then
             prompt+=$'\n\n'"## Library Documentation Needed"$'\n'
             prompt+="Please query Context7 for documentation on: ${libraries}"$'\n'
-            prompt+="Use resolve-library-id first, then get-library-docs."
+            prompt+="Use resolve-library-id first, then query-docs."
         fi
     fi
 

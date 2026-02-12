@@ -27,8 +27,8 @@ Track which files exist and their purpose. Update when files are created, modifi
 
 ### 5. Query Library Documentation (when needed)
 If the task metadata includes `needs_docs: true` or has entries in `libraries`, fetch documentation:
-- First call `resolve-library-id` with the library name to get the Context7-compatible library ID
-- Then call `get-library-docs` with that ID to fetch relevant API documentation
+- First call `resolve-library-id` with both the library name (`libraryName`) and a query (`query`) to get the Context7-compatible library ID
+- Then call `query-docs` with that ID (`libraryId`) and a specific query to fetch relevant API documentation
 - Extract key APIs and usage patterns and store them in the `library_docs` output field
 
 ### 6. Persist Knowledge to the Knowledge Graph

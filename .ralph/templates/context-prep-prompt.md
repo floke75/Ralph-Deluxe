@@ -20,8 +20,8 @@ You have access to MCP tools for research. Use them proactively:
 
 ### Context7 (Library Documentation)
 When the task involves external libraries (check the `Libraries` field in task metadata):
-1. Call `resolve-library-id` with the library name to get its Context7 ID
-2. Call `get-library-docs` with that ID to fetch current API documentation
+1. Call `resolve-library-id` with both the library name (`libraryName`) and a query describing what you need (`query`) to get its Context7 ID
+2. Call `query-docs` with the resolved library ID (`libraryId`) and a specific query to fetch current API documentation
 3. Extract the relevant APIs, patterns, and usage examples
 4. Include this directly in the coding prompt under `## Skills` or as an addendum to `## Current Task`
 
