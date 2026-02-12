@@ -18,7 +18,7 @@ trap "kill $SERVER_PID 2>/dev/null" INT TERM EXIT
 
 # Wait for server to be ready
 for i in $(seq 1 20); do
-  curl -s -o /dev/null "http://127.0.0.1:${PORT}/" 2>/dev/null && break
+  (echo >/dev/tcp/127.0.0.1/$PORT) 2>/dev/null && break
   sleep 0.25
 done
 

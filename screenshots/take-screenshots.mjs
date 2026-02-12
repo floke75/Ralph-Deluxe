@@ -196,11 +196,7 @@ async function main() {
 
     // 2. Run view — navigate to handoff #3
     await capturePage(context, "02-handoff-detail.png", async (page) => {
-      // Click "Next" chevron twice to get to handoff 3
-      const nextBtn = page.locator("button").filter({
-        has: page.locator("svg"),
-      });
-      // Use keyboard shortcut instead for reliability
+      // Navigate to handoff 3 via keyboard shortcut
       await page.keyboard.press("ArrowRight");
       await page.waitForTimeout(300);
       await page.keyboard.press("ArrowRight");
