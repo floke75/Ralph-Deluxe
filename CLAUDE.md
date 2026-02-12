@@ -28,6 +28,7 @@ plan.json → ralph.sh main loop → for each task:
      → returns directive (proceed/skip/review/research)
   4. run_coding_iteration()    [cli-ops.sh]     — invoke coding agent with prepared prompt
   5. parse_handoff_output()    [cli-ops.sh]     — extract handoff from response
+     → fallback chain: JSON parse → extraction agent (Haiku) → synthetic
   6. run_validation()          [validation.sh]  — run test/lint commands
   7a. PASS: commit + log + apply_amendments
   7b. FAIL: rollback + generate_failure_context → retry
@@ -80,6 +81,7 @@ ralph.sh memory/bootstrap paths
 | `.ralph/templates/context-prep-prompt.md` | System prompt for context prep agent (agent-orchestrated mode) |
 | `.ralph/templates/context-post-prompt.md` | System prompt for context post agent (agent-orchestrated mode) |
 | `.ralph/templates/review-agent-prompt.md` | System prompt for code review agent pass |
+| `.ralph/templates/handoff-extraction-prompt.md` | System prompt for handoff extraction fallback (Haiku) |
 | `.ralph/templates/` | Other prompt templates (coding-prompt-footer.md, first-iteration.md, knowledge-index-prompt.md, memory-prompt.md) |
 | `.ralph/skills/` | Per-task skill injection files (matched by task.skills[] array) |
 | `.ralph/handoffs/` | Raw handoff JSON per iteration (handoff-001.json, etc.) |
@@ -212,6 +214,21 @@ Required: `summary` (one-line), `freeform` (full narrative briefing — most imp
 Structured fields: `task_completed`, `deviations`, `bugs_encountered`, `architectural_notes`, `constraints_discovered`, `files_touched`, `plan_amendments`, `tests_added`, `unfinished_business`, `recommendations`.
 Signal fields (agent-orchestrated mode): `request_research` (string[]), `request_human_review` ({needed, reason}), `confidence_level` (high/medium/low).
 
+### Handoff Extraction Fallback Chain
+
+Claude CLI's `--json-schema` uses constrained decoding (`output_config.format`) and puts the schema-validated output in `.structured_output` (as a JSON object), not `.result`. The `.result` field is typically empty when structured output succeeds.
+
+`parse_handoff_output()` fallback chain:
+
+1. **`.structured_output`** (constrained decoding): JSON object validated by the grammar at the token level. Guaranteed schema-compliant when present.
+2. **`.result` as JSON string** (legacy path): Older CLI versions or manual JSON from agent.
+3. **Extraction agent** (rich fallback): Haiku model reads the agent's conversational text + git diff and produces structured handoff JSON. Recovers task_id, confidence_level, research requests, and a real freeform narrative. Template: `.ralph/templates/handoff-extraction-prompt.md`. Max 3 turns.
+4. **Synthetic fallback** (last resort): Builds minimal handoff from `git status` only — file list, turn count, truncated agent output. All signal fields lost.
+
+### Operator Hints (Human-in-the-Loop)
+
+Operators can inject guidance into a running loop via the dashboard `inject-note` command. Notes are written to `.ralph/context/operator-hints.md` (append-only). The context prep agent includes the hints file in its manifest and the coding prompt. Hints are consumed (file deleted) after context prep reads them — one-shot, not persistent.
+
 ## Plan Amendments (plan-ops.sh)
 
 Safety guardrails:
@@ -323,6 +340,24 @@ This file is loaded into the LLM system prompt. Structure it for rapid orientati
 ### Git
 - Commit format: `ralph[N]: TASK-ID — description`
 - Every success → commit. Every failure → rollback to checkpoint
+
+## Pipeline Test Harness
+
+14-task Node.js project (Express API + vanilla frontend) for end-to-end pipeline testing.
+
+| Path | Purpose |
+|------|---------|
+| `test-harness/{setup,run,analyze,loop}.sh` | Orchestration scripts: create workspace, run Ralph, analyze results, full loop |
+| `test-harness/config/` | `plan.json` (14 tasks), `ralph.conf` (agent-orchestrated + strict validation), `first-iteration.md` |
+| `test-harness/skills/express-api.md` | Skill file injected into coding prompts |
+| `test-harness/project-template/` | Seed project: Express server, Jest, ESLint, Playwright, seed tests |
+| `test-harness/LOGBOOK.md` | **Run logbook** — timestamped analysis of each pipeline run, findings, hypotheses, action items |
+
+Quick start: `bash test-harness/loop.sh` (setup → run → analyze in one command).
+
+Validation: strict (Jest + ESLint + Playwright). Success criteria: all 14 tasks done, <5 total retries, 0 synthetic handoffs, all freeform >200 chars.
+
+**LOGBOOK.md is the central record for pipeline tuning.** Every run gets an entry with: task progress, communication loop analysis (what flows between agents), handoff quality metrics, validation gate results, findings, hypotheses, and action items. Always read the latest logbook entry before starting a new run — it contains the context for what to fix/observe.
 
 ## Testing
 

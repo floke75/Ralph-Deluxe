@@ -172,6 +172,12 @@ process_control_commands() {
                 note="$(echo "$cmd_obj" | jq -r '.note // "no note"')"
                 emit_event "note" "$note"
                 log "info" "Operator note injected: $note"
+                # SIDE EFFECT: Also write to operator-hints.md so the context prep
+                # agent can include it in the next coding prompt. Appends (not overwrites)
+                # because multiple hints may arrive between iterations.
+                local hints_file="${RALPH_DIR:-.ralph}/context/operator-hints.md"
+                mkdir -p "$(dirname "$hints_file")"
+                echo "- [$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $note" >> "$hints_file"
                 ;;
             skip-task)
                 local skip_task_id

@@ -486,7 +486,7 @@ run_agent_coding_cycle() {
     [[ -n "$skills_file" && -f "$skills_file" ]] && rm -f "$skills_file"
 
     local handoff_json
-    if ! handoff_json="$(parse_handoff_output "$raw_response")"; then
+    if ! handoff_json="$(parse_handoff_output "$raw_response" "$task_json")"; then
         log "error" "Failed to parse handoff output for $task_id"
         return 1
     fi
@@ -625,8 +625,9 @@ run_coding_cycle() {
     # --- Parse and save handoff ---
     # Double-parse: Claude's response envelope has .result as a JSON string
     # (see cli-ops.sh parse_handoff_output for details).
+    # Pass task_json to enable handoff extraction fallback.
     local handoff_json
-    if ! handoff_json="$(parse_handoff_output "$raw_response")"; then
+    if ! handoff_json="$(parse_handoff_output "$raw_response" "$task_json")"; then
         log "error" "Failed to parse handoff output for $task_id"
         return 1
     fi

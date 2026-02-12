@@ -142,6 +142,45 @@ JSON
     echo "$output" | jq -e '.unfinished_business[0].priority == "high"' >/dev/null
 }
 
+# --- parse_handoff_output structured_output tests ---
+
+@test "parse_handoff_output prefers structured_output over result" {
+    # When both .structured_output and .result exist, .structured_output wins
+    local resp='{"type":"result","subtype":"success","structured_output":{"summary":"From structured","freeform":"test","task_completed":{"task_id":"TASK-002","summary":"structured path","fully_complete":true}},"result":"{\"summary\":\"From result\",\"task_completed\":{\"task_id\":\"TASK-001\",\"summary\":\"result path\",\"fully_complete\":true}}"}'
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    local task_id
+    task_id="$(echo "$output" | jq -r '.task_completed.task_id')"
+    [[ "$task_id" == "TASK-002" ]]
+}
+
+@test "parse_handoff_output extracts from structured_output when result is empty" {
+    # This is the actual CLI behavior: .result="" and .structured_output has the JSON
+    local resp='{"type":"result","subtype":"success","result":"","structured_output":{"summary":"Implemented feature X","freeform":"Detailed narrative about what was done...","task_completed":{"task_id":"TASK-005","summary":"Feature X complete","fully_complete":true}}}'
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    echo "$output" | jq -e '.task_completed.task_id == "TASK-005"' >/dev/null
+    echo "$output" | jq -e '.summary == "Implemented feature X"' >/dev/null
+}
+
+@test "parse_handoff_output falls back to result when structured_output is absent" {
+    # Legacy CLI versions or when constrained decoding isn't used
+    local resp
+    resp="$(valid_response)"
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    local task_id
+    task_id="$(echo "$output" | jq -r '.task_completed.task_id')"
+    [[ "$task_id" == "TASK-001" ]]
+}
+
+@test "parse_handoff_output falls back to result when structured_output is null" {
+    local resp='{"type":"result","subtype":"success","structured_output":null,"result":"{\"summary\":\"ok\",\"task_completed\":{\"task_id\":\"TASK-001\",\"summary\":\"done\",\"fully_complete\":true}}"}'
+    run parse_handoff_output "$resp"
+    [[ "$status" -eq 0 ]]
+    echo "$output" | jq -e '.task_completed.task_id == "TASK-001"' >/dev/null
+}
+
 # --- save_handoff tests ---
 
 @test "save_handoff creates numbered file" {

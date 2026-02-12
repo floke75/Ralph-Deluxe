@@ -150,6 +150,27 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+@test "parse_agent_output prefers structured_output over result" {
+    local response='{"type":"result","structured_output":{"action":"skip","reason":"from structured"},"result":"{\"action\":\"proceed\",\"reason\":\"from result\"}"}'
+    local output
+    output="$(parse_agent_output "$response")"
+    [[ "$(echo "$output" | jq -r '.action')" == "skip" ]]
+}
+
+@test "parse_agent_output extracts from structured_output when result is empty" {
+    local response='{"type":"result","result":"","structured_output":{"action":"proceed","summary":"context ready"}}'
+    local output
+    output="$(parse_agent_output "$response")"
+    [[ "$(echo "$output" | jq -r '.action')" == "proceed" ]]
+}
+
+@test "parse_agent_output falls back to result when structured_output is null" {
+    local response='{"type":"result","structured_output":null,"result":"{\"action\":\"proceed\"}"}'
+    local output
+    output="$(parse_agent_output "$response")"
+    [[ "$(echo "$output" | jq -r '.action')" == "proceed" ]]
+}
+
 # ===== build_context_prep_input tests =====
 
 @test "build_context_prep_input includes task details" {

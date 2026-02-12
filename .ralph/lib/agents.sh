@@ -156,14 +156,27 @@ run_agent_iteration() {
 }
 
 # Parse structured output from an agent's response envelope.
-# WHY: Same double-parse as parse_handoff_output() in cli-ops.sh — the .result
-# field contains JSON as a string.
+# WHY: Claude CLI puts constrained-decoding output in .structured_output (JSON
+# object) and conversational text in .result (string). We check both fields.
 # Args: $1 = raw response JSON
 # Stdout: parsed inner JSON
 # Returns: 0 on success, 1 on parse failure
 parse_agent_output() {
     local response="$1"
 
+    # Check .structured_output first (constrained decoding via --json-schema)
+    local structured
+    structured=$(echo "$response" | jq '.structured_output // empty' 2>/dev/null) || true
+
+    if [[ -n "$structured" && "$structured" != "null" ]]; then
+        if echo "$structured" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            log "info" "Agent output extracted from .structured_output"
+            echo "$structured"
+            return 0
+        fi
+    fi
+
+    # Fall back to .result (legacy path — JSON as string)
     local result
     result=$(echo "$response" | jq -r '.result // empty' 2>/dev/null) || {
         log "error" "Failed to parse agent response JSON"
@@ -171,7 +184,7 @@ parse_agent_output() {
     }
 
     if [[ -z "$result" ]]; then
-        log "error" "Empty result in agent response"
+        log "error" "Empty result and no structured_output in agent response"
         log "error" "Response type: $(echo "$response" | jq -r '.type // "unknown"' 2>/dev/null)"
         log "error" "Response subtype: $(echo "$response" | jq -r '.subtype // "unknown"' 2>/dev/null)"
         log "error" "Is error: $(echo "$response" | jq -r '.is_error // "unknown"' 2>/dev/null)"
@@ -283,6 +296,18 @@ build_context_prep_input() {
     manifest+="- Output instructions template (READ-ONLY): ${base_dir}/templates/coding-prompt-footer.md"$'\n'
     if [[ "$current_iteration" -eq 1 && -f "${base_dir}/templates/first-iteration.md" ]]; then
         manifest+="- First iteration template (READ-ONLY): ${base_dir}/templates/first-iteration.md"$'\n'
+    fi
+
+    # Operator hints (human-in-the-loop guidance)
+    # WHY: Operators can inject notes via dashboard while the loop is running.
+    # These are written to operator-hints.md by telemetry.sh and consumed here
+    # so the context agent can include them in the coding prompt.
+    local hints_file="${base_dir}/context/operator-hints.md"
+    if [[ -f "$hints_file" && -s "$hints_file" ]]; then
+        manifest+=$'\n'"## Operator Hints (Human Guidance)"$'\n'
+        manifest+="The operator injected these hints while the loop was running."$'\n'
+        manifest+="Include them prominently in the coding prompt — they represent direct human intent."$'\n'
+        manifest+="Hints file: ${hints_file}"$'\n'
     fi
 
     # Research requests from previous coding agent
@@ -469,6 +494,15 @@ EOF
     local action
     action="$(echo "$directive_json" | jq -r '.action // "proceed"')"
     log "info" "Context prep complete: action=${action}, prompt=${prompt_size} bytes"
+
+    # Consume operator hints after context prep has read them.
+    # WHY: Hints are one-shot — once the context agent has incorporated them into
+    # the coding prompt, they should not be re-injected in future iterations.
+    local hints_file="${base_dir}/context/operator-hints.md"
+    if [[ -f "$hints_file" ]]; then
+        log "info" "Consumed operator hints file"
+        rm -f "$hints_file"
+    fi
 
     local metadata
     metadata="$(echo "$raw_response" | jq '{cost_usd: (.cost_usd // 0), duration_ms: (.duration_ms // 0), num_turns: (.num_turns // 0)}' 2>/dev/null || echo "{}")"
