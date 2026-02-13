@@ -370,5 +370,3 @@ Ralph Deluxe v2 added three things to the original orchestrator:
 3. **Dashboard + control plane** -- A single-file HTML dashboard that reads telemetry events, handoffs, and state files for monitoring, plus a control plane (via `serve.py`) for pause/resume, note injection, task skipping, and settings changes.
 
 The original L1/L2/L3 compaction system and context hierarchy remain in the codebase for backward compatibility but are superseded by the handoff-first approach in both modes.
-
-For the full v2 design specification, see `ralph-deluxe-v2-revision-plan 2.md`.
