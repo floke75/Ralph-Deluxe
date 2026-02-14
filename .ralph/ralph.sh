@@ -815,6 +815,14 @@ main() {
         ensure_clean_state
     fi
 
+    # Bootstrap CLAUDE.md if not present — gives all agents project conventions.
+    # WHY: All agents use `claude -p` which auto-loads CLAUDE.md from the working
+    # directory. Generating it before the first iteration ensures every agent
+    # invocation gets project conventions in its system prompt.
+    if declare -f bootstrap_claude_md >/dev/null 2>&1; then
+        bootstrap_claude_md
+    fi
+
     log "info" "Starting main loop (max_iterations=$MAX_ITERATIONS)"
 
     while (( current_iteration < MAX_ITERATIONS )); do

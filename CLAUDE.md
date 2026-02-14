@@ -59,6 +59,11 @@ serve.py (HTTP) ←→ dashboard.html (polls every 3s)
 ralph.sh memory/bootstrap paths
   Reads (optional): .ralph/templates/first-iteration.md
   Reads (legacy compaction): .ralph/templates/memory-prompt.md
+
+ralph.sh CLAUDE.md bootstrap (pre-loop, all modes)
+  agents.sh:bootstrap_claude_md() → generates CLAUDE.md if missing
+  agents.sh:build_bootstrap_claude_md_input() → manifest with project file pointers
+  Update pass (agent-orchestrated, periodic:3): claudemd-update in agents.json
 ```
 
 ## Directory Structure
@@ -73,6 +78,8 @@ ralph.sh memory/bootstrap paths
 | `.ralph/config/context-prep-schema.json` | JSON schema for context prep agent output |
 | `.ralph/config/context-post-schema.json` | JSON schema for context post agent output |
 | `.ralph/config/review-agent-schema.json` | JSON schema for code review agent output |
+| `.ralph/config/claude-md-bootstrap-schema.json` | JSON schema for CLAUDE.md bootstrap agent output |
+| `.ralph/config/claude-md-update-schema.json` | JSON schema for CLAUDE.md update pass output |
 | `.ralph/config/mcp-coding.json` | MCP config for coding iterations (stdio) |
 | `.ralph/config/mcp-context.json` | MCP config for context agent — Context7 (stdio) |
 | `.ralph/config/mcp-memory.json` | MCP config for legacy memory/indexer iterations (stdio) |
@@ -81,6 +88,8 @@ ralph.sh memory/bootstrap paths
 | `.ralph/templates/context-prep-prompt.md` | System prompt for context prep agent (agent-orchestrated mode) |
 | `.ralph/templates/context-post-prompt.md` | System prompt for context post agent (agent-orchestrated mode) |
 | `.ralph/templates/review-agent-prompt.md` | System prompt for code review agent pass |
+| `.ralph/templates/claude-md-bootstrap-prompt.md` | System prompt for CLAUDE.md bootstrap agent |
+| `.ralph/templates/claude-md-update-prompt.md` | System prompt for CLAUDE.md periodic update pass |
 | `.ralph/templates/handoff-extraction-prompt.md` | System prompt for handoff extraction fallback (Haiku) |
 | `.ralph/templates/` | Other prompt templates (coding-prompt-footer.md, first-iteration.md, knowledge-index-prompt.md, memory-prompt.md) |
 | `.ralph/skills/` | Per-task skill injection files (matched by task.skills[] array) |
@@ -142,6 +151,26 @@ Two-agent architecture: a **context agent** prepares pristine context for a **co
 - Triggers: `always`, `on_success`, `on_failure`, `periodic:N`
 - Passes are non-fatal: failures logged but don't block the main loop
 - Code review pass included as skeleton (disabled by default)
+- CLAUDE.md update pass (`claudemd-update`): enabled, `periodic:3` trigger, updates project conventions
+
+### CLAUDE.md Bootstrap & Maintenance
+
+CLAUDE.md is auto-generated and dynamically maintained as a first-class orchestrator artifact. All agents use `claude -p` which auto-loads CLAUDE.md from the working directory — once it exists, every agent gets project conventions for free.
+
+**Bootstrap** (`bootstrap_claude_md()` in agents.sh):
+- Runs once before the main loop in all modes (ralph.sh pre-loop init)
+- Skips if CLAUDE.md already exists, if in dry-run mode, or if template/schema missing
+- Invokes a lightweight agent that scans project files (package.json, linter configs, plan.json, etc.) and generates conventions
+- Non-fatal: failure logs a warning and continues
+
+**Update pass** (`claudemd-update` in agents.json):
+- Runs every 3 iterations in agent-orchestrated mode via the agent pass framework
+- Reads CLAUDE.md + knowledge-index.md + latest handoff
+- Promotes stable patterns from knowledge-index into CLAUDE.md conventions
+- Conservative: skips update if no meaningful changes since last pass
+- Non-fatal: pass framework handles failures gracefully
+
+**Content separation**: CLAUDE.md holds stable project conventions (architecture, coding patterns, testing setup). knowledge-index.md holds iteration-specific granular discoveries (constraints, decisions, gotchas with supersession chains).
 
 ## The 7-Section Prompt (`build_coding_prompt_v2` in context.sh)
 
@@ -376,7 +405,7 @@ Validation: strict (Jest + ESLint + Playwright). Success criteria: all 14 tasks 
 
 Framework: bats-core. Files: `tests/<module>.bats`. Temp dirs for isolation.
 
-Key test coverage (12 files, 341 tests):
+Key test coverage (13 files, 368 tests):
 - `agents.bats`: context prep/post input building, directive handling, pass triggers, agent config loading, dry-run flows, handoff signal fields, structured_output parsing
 - `cli-ops.bats`: coding iteration invocation, handoff parsing fallback chain, structured_output preference, extraction agent, response metadata
 - `compaction.bats`: constraint supersession, constraint drop rejection, novelty thresholds, JSON append-only
@@ -387,6 +416,7 @@ Key test coverage (12 files, 341 tests):
 - `plan-ops.bats`: dependency resolution, amendment guardrails (max 3, no done removal)
 - `progress-log.bats`: progress log generation, markdown and JSON output
 - `telemetry.bats`: event emission, control command processing, operator hints
+- `claudemd.bats`: CLAUDE.md bootstrap input building, guard conditions, update pass config, schema validation
 - `template-guard.bats`: template file integrity, required section headers
 - `validation.bats`: strategy evaluation, command classification, failure context generation
 

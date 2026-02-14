@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "generated": {
+      "type": "boolean",
+      "description": "Whether CLAUDE.md was successfully generated."
+    },
+    "sections_included": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Section headers included in the generated CLAUDE.md."
+    },
+    "project_type": {
+      "type": "string",
+      "description": "Detected project type (e.g., node, python, rust, bash, mixed)."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief summary of what was generated and key conventions discovered."
+    }
+  },
+  "required": ["generated", "summary"]
+}

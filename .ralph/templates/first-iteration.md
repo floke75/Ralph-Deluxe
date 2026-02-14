@@ -27,7 +27,7 @@ There are **7 failing bats tests** and **3 shellcheck SC2034 warnings** that mus
 - **validation.bats test 314**: `run_validation` with empty `RALPH_VALIDATION_COMMANDS` array — `set -u` causes "unbound variable" on `${RALPH_VALIDATION_COMMANDS[@]}`. Need to guard the array access.
 
 ## Key Conventions
-- Read `CLAUDE.md` for full project conventions
+- `CLAUDE.md` contains auto-generated project conventions (loaded automatically via `-p` flag)
 - Every `.sh` file uses `set -euo pipefail`
 - macOS ships bash 3.2 — no `${var^^}` (bash 4+), no `declare -A` with `set -u`
 - Functions return 0/non-zero, log via shared `log()`

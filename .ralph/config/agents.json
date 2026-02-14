@@ -26,6 +26,17 @@
       "schema": "review-agent-schema.json",
       "mcp_config": "mcp-coding.json",
       "read_only": true
+    },
+    {
+      "name": "claudemd-update",
+      "enabled": true,
+      "model": null,
+      "trigger": "periodic:3",
+      "max_turns": 10,
+      "prompt_template": "claude-md-update-prompt.md",
+      "schema": "claude-md-update-schema.json",
+      "mcp_config": "mcp-coding.json",
+      "read_only": false
     }
   ]
 }

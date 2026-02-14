@@ -18,13 +18,16 @@ set -euo pipefail
 #                 RALPH_SKIP_PERMISSIONS, RALPH_CONTEXT_AGENT_MODEL
 #   Globals written: none
 #   Files read: .ralph/config/agents.json, .ralph/config/context-prep-schema.json,
-#               .ralph/config/context-post-schema.json, .ralph/config/mcp-context.json,
+#               .ralph/config/context-post-schema.json, .ralph/config/claude-md-bootstrap-schema.json,
+#               .ralph/config/mcp-context.json, .ralph/config/mcp-coding.json,
 #               .ralph/templates/context-prep-prompt.md, .ralph/templates/context-post-prompt.md,
+#               .ralph/templates/claude-md-bootstrap-prompt.md,
 #               .ralph/handoffs/handoff-NNN.json, .ralph/knowledge-index.{md,json},
 #               .ralph/logs/validation/iter-N.json, .ralph/context/failure-context.md,
 #               .ralph/state.json
 #   Files written: .ralph/context/prepared-prompt.md (by context agent via file tools),
-#                  .ralph/knowledge-index.{md,json} (by context agent via file tools)
+#                  .ralph/knowledge-index.{md,json} (by context agent via file tools),
+#                  CLAUDE.md (by bootstrap agent via file tools)
 #
 # DATA FLOW:
 #   Pre-coding:
@@ -790,6 +793,161 @@ handle_post_directives() {
 }
 
 ###############################################################################
+# CLAUDE.md bootstrap
+###############################################################################
+
+# Build input manifest for the CLAUDE.md bootstrap agent.
+# Design: file pointers (not content) — the agent reads what it needs via tools.
+#
+# Stdout: markdown manifest listing project files to analyze
+# CALLER: bootstrap_claude_md()
+# SIDE EFFECT: none (pure function)
+build_bootstrap_claude_md_input() {
+    local project_root="${PROJECT_ROOT:-$(pwd)}"
+    local base_dir="${RALPH_DIR:-.ralph}"
+
+    local manifest=""
+    manifest+="# CLAUDE.md Bootstrap Input"$'\n\n'
+    manifest+="Generate a CLAUDE.md conventions file for this project."$'\n\n'
+
+    # Plan file — task titles reveal project purpose
+    local plan_file="${PLAN_FILE:-plan.json}"
+    if [[ -f "${project_root}/${plan_file}" ]]; then
+        manifest+="## Plan File"$'\n'
+        manifest+="- Path: ${project_root}/${plan_file}"$'\n\n'
+    fi
+
+    # First-iteration template — operator-defined initial conventions
+    if [[ -f "${base_dir}/templates/first-iteration.md" ]]; then
+        manifest+="## First Iteration Template"$'\n'
+        manifest+="- Path: ${base_dir}/templates/first-iteration.md"$'\n'
+        manifest+="- Contains initial project conventions set up by the operator"$'\n\n'
+    fi
+
+    # Detect project manifest files
+    manifest+="## Detected Project Files"$'\n'
+    local found_any=false
+    local -a check_files=(
+        "package.json" "pyproject.toml" "Cargo.toml" "go.mod" "Makefile"
+        "Dockerfile" "composer.json" "Gemfile" "build.gradle" "pom.xml"
+        "tsconfig.json" ".eslintrc.json" ".eslintrc.js" ".eslintrc.yml"
+        ".prettierrc" ".prettierrc.json" "jest.config.js" "jest.config.ts"
+        "playwright.config.js" "playwright.config.ts" "pytest.ini" "setup.py"
+        "setup.cfg" "requirements.txt" ".flake8" "rustfmt.toml"
+    )
+    for f in "${check_files[@]}"; do
+        if [[ -f "${project_root}/${f}" ]]; then
+            manifest+="- ${project_root}/${f}"$'\n'
+            found_any=true
+        fi
+    done
+    if [[ "$found_any" == "false" ]]; then
+        manifest+="- No standard project manifests found"$'\n'
+    fi
+    manifest+=$'\n'
+
+    # Validation commands from config
+    if [[ -n "${RALPH_VALIDATION_COMMANDS+x}" ]]; then
+        # WHY: bash 3.2 triggers unbound variable on empty arrays with set -u.
+        # Guard with element count check before iterating.
+        local cmd_count="${#RALPH_VALIDATION_COMMANDS[@]}"
+        if [[ "$cmd_count" -gt 0 ]]; then
+            manifest+="## Validation Commands"$'\n'
+            manifest+="These commands must pass after every coding iteration:"$'\n'
+            local idx=0
+            while [[ "$idx" -lt "$cmd_count" ]]; do
+                manifest+="- \`${RALPH_VALIDATION_COMMANDS[$idx]}\`"$'\n'
+                idx=$((idx + 1))
+            done
+            manifest+=$'\n'
+        fi
+    fi
+
+    # Project root for directory scanning
+    manifest+="## Project Root"$'\n'
+    manifest+="- Path: ${project_root}"$'\n'
+    manifest+="- Scan this directory to understand the project layout"$'\n\n'
+
+    # Output location
+    manifest+="## Output"$'\n'
+    manifest+="Write CLAUDE.md to: ${project_root}/CLAUDE.md"$'\n'
+
+    echo "$manifest"
+}
+
+# Bootstrap CLAUDE.md if it doesn't exist in the project root.
+# Invokes a lightweight agent to scan the project and generate initial conventions.
+#
+# Returns: 0 always (non-fatal — orchestrator works without CLAUDE.md)
+# CALLER: ralph.sh pre-loop initialization
+# SIDE EFFECT: creates CLAUDE.md in PROJECT_ROOT (via agent file tools)
+bootstrap_claude_md() {
+    local project_root="${PROJECT_ROOT:-$(pwd)}"
+    local base_dir="${RALPH_DIR:-.ralph}"
+
+    # Guard: skip if CLAUDE.md already exists
+    if [[ -f "${project_root}/CLAUDE.md" ]]; then
+        log "debug" "CLAUDE.md already exists, skipping bootstrap"
+        return 0
+    fi
+
+    # Guard: skip in dry-run mode (no agent invocations)
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log "debug" "Dry-run mode, skipping CLAUDE.md bootstrap"
+        return 0
+    fi
+
+    log "info" "Bootstrapping CLAUDE.md — scanning project to generate conventions"
+
+    local schema_file="${base_dir}/config/claude-md-bootstrap-schema.json"
+    local system_prompt_file="${base_dir}/templates/claude-md-bootstrap-prompt.md"
+
+    # Guard: skip if template or schema missing
+    if [[ ! -f "$schema_file" || ! -f "$system_prompt_file" ]]; then
+        log "warn" "CLAUDE.md bootstrap skipped — missing schema or template"
+        return 0
+    fi
+
+    local manifest
+    manifest="$(build_bootstrap_claude_md_input)"
+
+    local mcp_config
+    if declare -f resolve_mcp_config >/dev/null 2>&1; then
+        mcp_config="$(resolve_mcp_config "mcp-coding.json" "${base_dir}/config")"
+    else
+        mcp_config="${base_dir}/config/mcp-coding.json"
+    fi
+
+    local raw_response
+    if raw_response="$(run_agent_iteration "$manifest" "$schema_file" "$mcp_config" 15 "" "$system_prompt_file" 2>/dev/null)"; then
+        # Verify CLAUDE.md was created with reasonable content
+        if [[ -f "${project_root}/CLAUDE.md" ]]; then
+            local file_size
+            file_size="$(wc -c < "${project_root}/CLAUDE.md" | tr -d ' ')"
+            if [[ "$file_size" -gt 100 ]]; then
+                log "info" "CLAUDE.md bootstrapped (${file_size} bytes)"
+            else
+                log "warn" "CLAUDE.md bootstrap produced undersized file (${file_size} bytes)"
+            fi
+        else
+            log "warn" "CLAUDE.md bootstrap agent ran but did not create the file"
+        fi
+    else
+        log "warn" "CLAUDE.md bootstrap agent invocation failed — continuing without it"
+    fi
+
+    # Emit telemetry
+    if declare -f emit_event >/dev/null 2>&1; then
+        local generated="false"
+        [[ -f "${project_root}/CLAUDE.md" ]] && generated="true"
+        emit_event "claudemd_bootstrap" "CLAUDE.md bootstrap completed" \
+            "$(jq -cn --argjson generated "$generated" '{generated: $generated}')" || true
+    fi
+
+    return 0
+}
+
+###############################################################################
 # Agent pass framework
 ###############################################################################
 
@@ -821,6 +979,18 @@ build_pass_input() {
     manifest+="- Handoff file: ${handoff_file}"$'\n'
     manifest+="- Plan file: ${PLAN_FILE:-plan.json}"$'\n'
     manifest+="- Project root: ${PROJECT_ROOT:-$(pwd)}"$'\n'
+
+    # Pass-specific context pointers
+    # WHY: Generic manifest is minimal; passes like claudemd-update need
+    # additional file references to do their work effectively.
+    if [[ "$pass_name" == "claudemd-update" ]]; then
+        manifest+="- CLAUDE.md: ${PROJECT_ROOT:-$(pwd)}/CLAUDE.md"$'\n'
+        local ki_file="${RALPH_DIR:-.ralph}/knowledge-index.md"
+        if [[ -f "$ki_file" ]]; then
+            manifest+="- Knowledge index: ${ki_file}"$'\n'
+        fi
+    fi
+
     echo "$manifest"
 }
 

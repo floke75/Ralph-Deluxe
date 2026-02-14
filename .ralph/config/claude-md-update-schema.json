@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "updated": {
+      "type": "boolean",
+      "description": "Whether CLAUDE.md was modified in this pass."
+    },
+    "changes_made": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of changes made to CLAUDE.md."
+    },
+    "sections_modified": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Section headers that were added or modified."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief summary of what changed and why."
+    }
+  },
+  "required": ["updated", "summary"]
+}
